@@ -13,6 +13,17 @@ function slugify(value) {
     .slice(0, 80);
 }
 
+function buildDomainCandidates(domain) {
+  const normalized = String(domain || '').toLowerCase();
+  const candidates = [normalized];
+  if (normalized.startsWith('www.')) {
+    candidates.push(normalized.slice(4));
+  } else if (normalized) {
+    candidates.push(`www.${normalized}`);
+  }
+  return [...new Set(candidates.filter(Boolean))];
+}
+
 export async function saveSkill({ name, content, domain }) {
   const safeDomain = domain.replace(/[^a-z0-9.-]+/gi, '-').toLowerCase();
   const domainDir = path.join(SKILLS_DIR, safeDomain);
@@ -25,27 +36,48 @@ export async function saveSkill({ name, content, domain }) {
 }
 
 export async function loadSkillsForSite(domain) {
-  try {
-    const domainDir = path.join(SKILLS_DIR, domain);
-    const files = (await fs.readdir(domainDir)).filter((file) => file.endsWith('.md'));
-    const loaded = await Promise.all(
-      files.map(async (file) => ({
-        domain,
-        name: file.replace(/\.md$/, ''),
-        filename: file,
-        content: await fs.readFile(path.join(domainDir, file), 'utf8')
-      }))
-    );
-    return loaded;
-  } catch {
-    return [];
+  const allLoaded = [];
+
+  for (const candidate of buildDomainCandidates(domain)) {
+    try {
+      const domainDir = path.join(SKILLS_DIR, candidate);
+      const files = (await fs.readdir(domainDir)).filter((file) => file.endsWith('.md'));
+      const loaded = await Promise.all(
+        files.map(async (file) => ({
+          domain: candidate,
+          name: file.replace(/\.md$/, ''),
+          filename: file,
+          content: await fs.readFile(path.join(domainDir, file), 'utf8')
+        }))
+      );
+      allLoaded.push(...loaded);
+    } catch {}
   }
+
+  return allLoaded;
 }
 
 export async function loadAllSkills() {
   try {
     const domains = await fs.readdir(SKILLS_DIR);
-    const loaded = await Promise.all(domains.map((domain) => loadSkillsForSite(domain)));
+    const loaded = await Promise.all(
+      domains.map(async (domain) => {
+        try {
+          const domainDir = path.join(SKILLS_DIR, domain);
+          const files = (await fs.readdir(domainDir)).filter((file) => file.endsWith('.md'));
+          return Promise.all(
+            files.map(async (file) => ({
+              domain,
+              name: file.replace(/\.md$/, ''),
+              filename: file,
+              content: await fs.readFile(path.join(domainDir, file), 'utf8')
+            }))
+          );
+        } catch {
+          return [];
+        }
+      })
+    );
     return loaded.flat().sort((a, b) => a.domain.localeCompare(b.domain));
   } catch {
     return [];

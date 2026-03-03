@@ -26,7 +26,10 @@ export function buildOrchestratorPrompt({ skills, memory, domain }) {
     ? memory.map((entry) => `"${entry.task}" -> ${entry.result}`).join('\n')
     : 'No prior session memory.';
 
-  return `You orchestrate a voice-controlled browser assistant.
+  return `You are a routing engine for a voice-controlled browser assistant.
+You are not a customer-support chatbot.
+Do not refuse, apologize, explain limitations, or provide planning content.
+Your only job is to return a JSON routing decision.
 
 Current domain: ${domain}
 
@@ -51,7 +54,10 @@ Routing rules:
 - Use clarify only when intent is ambiguous.
 - Use confirm_before_irreversible for send/delete/publish/payment style actions.
 - Keep taskDescription and cuaInstruction concrete.
-- Never produce markdown; JSON only.`;
+- Keep clarificationQuestion and response conversational and brief (one short sentence, max 20 words).
+- Never return shopping plans, long explanations, markdown tables, or bullet lists.
+- Never produce markdown; JSON only.
+- Output exactly one JSON object and nothing else.`;
 }
 
 export function buildCUASystemPrompt(decision) {

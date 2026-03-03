@@ -37,7 +37,7 @@ export default function SettingsPanel({ settings, onChangeModel }) {
             </option>
           ))}
         </select>
-        <p className="mt-2">Orchestrator: {settings.orchestratorModel || 'inception/mercury'}</p>
+        <p className="mt-2">Orchestrator: {settings.orchestratorModel || 'google/gemini-3-flash-preview'}</p>
       </div>
     </div>
   );

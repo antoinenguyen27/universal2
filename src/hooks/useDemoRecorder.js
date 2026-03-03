@@ -18,6 +18,14 @@ export function useDemoRecorder({ onSegment, onLog }) {
   const segmentQueueRef = useRef(Promise.resolve());
   const recordingStartedAtRef = useRef(0);
   const hasDetectedSpeechRef = useRef(false);
+  const stopResolversRef = useRef([]);
+
+  const resolveStopWaiters = useCallback(() => {
+    if (!stopResolversRef.current.length) return;
+    const resolvers = stopResolversRef.current;
+    stopResolversRef.current = [];
+    resolvers.forEach((resolve) => resolve());
+  }, []);
 
   const setupRecorder = useCallback(() => {
     const stream = streamRef.current;
@@ -66,7 +74,7 @@ export function useDemoRecorder({ onSegment, onLog }) {
   const cutSegment = useCallback(
     (finalCut = false) => {
       const recorder = mediaRecorderRef.current;
-      if (!recorder || recorder.state === 'inactive') return;
+      if (!recorder || recorder.state === 'inactive') return false;
 
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
@@ -78,14 +86,19 @@ export function useDemoRecorder({ onSegment, onLog }) {
             onLog?.(`Demo segment processing failed: ${String(error?.message || error)}`, 'error');
           });
 
+        if (finalCut) {
+          segmentQueueRef.current.finally(resolveStopWaiters);
+        }
+
         if (!finalCut && isRecording) {
           setupRecorder();
         }
       };
 
       recorder.stop();
+      return true;
     },
-    [isRecording, onLog, processSegmentBlob, setupRecorder]
+    [isRecording, onLog, processSegmentBlob, resolveStopWaiters, setupRecorder]
   );
 
   const startRecording = useCallback(async () => {
@@ -147,7 +160,7 @@ export function useDemoRecorder({ onSegment, onLog }) {
       silenceTimerRef.current = null;
     }
 
-    cutSegment(true);
+    const cutStarted = cutSegment(true);
 
     setTimeout(() => {
       processorRef.current?.disconnect();
@@ -165,13 +178,24 @@ export function useDemoRecorder({ onSegment, onLog }) {
 
       setIsRecording(false);
       onLog?.('Demo recorder stopped.', 'status');
+      if (!cutStarted) {
+        resolveStopWaiters();
+      }
     }, 220);
-  }, [cutSegment, isRecording, onLog]);
+  }, [cutSegment, isRecording, onLog, resolveStopWaiters]);
+
+  const stopAndFlush = useCallback(() => {
+    if (!isRecording) return segmentQueueRef.current.catch(() => {});
+    return new Promise((resolve) => {
+      stopResolversRef.current.push(resolve);
+      stopRecording();
+    });
+  }, [isRecording, stopRecording]);
 
   const toggle = useCallback(() => {
     if (isRecording) stopRecording();
     else startRecording();
   }, [isRecording, startRecording, stopRecording]);
 
-  return { isRecording, toggle };
+  return { isRecording, toggle, stopAndFlush };
 }

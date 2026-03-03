@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { DEMO_AGENT_SYSTEM_PROMPT } from './prompts.js';
-import { getPage } from '../electron/stagehand-manager.js';
+import { getPage, getStagehand } from '../electron/stagehand-manager.js';
 import { writeSkillFromDemo } from '../skills/skill-writer.js';
 import { pushStatus } from '../electron/status-bus.js';
 
@@ -19,6 +19,10 @@ const state = {
   currentSkillDraft: null,
   lastObserveResult: null,
   observeTimer: null,
+  periodicObserveTimer: null,
+  lastObservedUrl: '',
+  observeInFlight: false,
+  queuedObserveReason: null,
   page: null,
   listenersInstalled: false,
   awaitingConfirmation: null,
@@ -37,50 +41,57 @@ function normalizeDomain(urlString) {
   }
 }
 
+function isWeakObservedContext(observedElements = []) {
+  if (!Array.isArray(observedElements) || observedElements.length < 3) return true;
+  const generic = new Set([
+    'button',
+    'input',
+    'select',
+    'textarea',
+    'link',
+    'a',
+    'div',
+    'span'
+  ]);
+  const informative = observedElements.filter((element) => {
+    const description = String(element?.description || element?.text || '').trim().toLowerCase();
+    if (!description) return false;
+    if (generic.has(description)) return false;
+    return description.length > 2;
+  });
+  return informative.length < 3;
+}
+
 function scheduleObserve(reason) {
   if (!state.active) return;
   clearTimeout(state.observeTimer);
   state.observeTimer = setTimeout(() => {
-    fireObserve(reason).catch((error) => pushStatus(`Observe failed: ${error.message}`, 'error'));
+    requestObserve(reason).catch((error) => pushStatus(`Observe failed: ${error.message}`, 'error'));
   }, 600);
+}
+
+function startPeriodicObserve() {
+  if (state.periodicObserveTimer) return;
+  state.periodicObserveTimer = setInterval(() => {
+    if (!state.active) return;
+    const currentUrl = typeof state.page?.url === 'function' ? state.page.url() : '';
+    if (currentUrl && currentUrl !== state.lastObservedUrl) {
+      scheduleObserve('url-change');
+      return;
+    }
+    scheduleObserve('periodic');
+  }, 3000);
+}
+
+function stopPeriodicObserve() {
+  if (state.periodicObserveTimer) {
+    clearInterval(state.periodicObserveTimer);
+    state.periodicObserveTimer = null;
+  }
 }
 
 async function installPageListeners(page) {
   if (state.listenersInstalled) return;
-
-  const attach = (eventName, handler, onUnsupportedMessage) => {
-    try {
-      page.on(eventName, handler);
-      return true;
-    } catch (error) {
-      const message = String(error?.message || error);
-      if (/Unsupported event/i.test(message)) {
-        pushStatus(onUnsupportedMessage, 'warning');
-        return false;
-      }
-      throw error;
-    }
-  };
-
-  // Some Stagehand page wrappers do not expose Playwright 'request' events.
-  // Verified via runtime logs: fallback to navigation + DOM mutation observers when unsupported.
-  attach(
-    'request',
-    (request) => {
-      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method())) {
-        scheduleObserve('network:mutation');
-      }
-    },
-    'Network mutation listener unavailable on this page wrapper; using navigation + DOM signals.'
-  );
-
-  attach(
-    'framenavigated',
-    (frame) => {
-      if (frame === page.mainFrame()) scheduleObserve('navigation');
-    },
-    'Frame navigation listener unavailable on this page wrapper; using DOM signals.'
-  );
 
   if (typeof page.exposeFunction === 'function') {
     await page
@@ -89,7 +100,7 @@ async function installPageListeners(page) {
       })
       .catch(() => {});
   } else {
-    pushStatus('DOM bridge unavailable on this page wrapper; relying on voice-triggered observe.', 'warning');
+    pushStatus('DOM bridge unavailable on this page wrapper; relying on Stagehand observe + periodic signals.', 'warning');
   }
 
   if (typeof page.evaluate === 'function') {
@@ -115,6 +126,7 @@ async function installPageListeners(page) {
       .catch(() => {});
   }
 
+  startPeriodicObserve();
   state.listenersInstalled = true;
 }
 
@@ -123,12 +135,9 @@ async function removePageListeners() {
 
   clearTimeout(state.observeTimer);
   state.observeTimer = null;
-
-  for (const eventName of ['request', 'framenavigated', 'pageerror']) {
-    try {
-      state.page.removeAllListeners(eventName);
-    } catch {}
-  }
+  stopPeriodicObserve();
+  state.observeInFlight = false;
+  state.queuedObserveReason = null;
 
   if (typeof state.page.evaluate === 'function') {
     await state.page
@@ -145,28 +154,70 @@ async function removePageListeners() {
   state.listenersInstalled = false;
 }
 
+async function requestObserve(reason) {
+  if (!state.active) return;
+  if (state.observeInFlight) {
+    state.queuedObserveReason = reason;
+    return;
+  }
+
+  state.observeInFlight = true;
+  try {
+    await fireObserve(reason);
+  } finally {
+    state.observeInFlight = false;
+    if (state.queuedObserveReason && state.active) {
+      const queuedReason = state.queuedObserveReason;
+      state.queuedObserveReason = null;
+      setTimeout(() => {
+        requestObserve(queuedReason).catch((error) => pushStatus(`Observe failed: ${error.message}`, 'error'));
+      }, 0);
+    }
+  }
+}
+
+function normalizeObservedElements(observed) {
+  if (!Array.isArray(observed)) return [];
+  return observed
+    .map((item) => {
+      const description =
+        item?.description ||
+        item?.text ||
+        item?.label ||
+        item?.instruction ||
+        item?.action ||
+        String(item || '');
+      const method = item?.method || item?.type || 'act';
+      if (!description) return null;
+      return { description: String(description), method: String(method) };
+    })
+    .filter(Boolean);
+}
+
 async function fireObserve(reason) {
   const page = state.page || (await getPage());
+  const sh = await getStagehand();
+  const currentUrl = typeof page.url === 'function' ? page.url() : '';
 
   if (typeof page.waitForLoadState === 'function') {
     await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
   }
   let observed = [];
+  let observeSource = 'stagehand';
+  observed = await sh
+    .observe('List visible interactive elements and what action each enables.')
+    .then((result) => normalizeObservedElements(result))
+    .catch((error) => {
+      pushStatus(`Stagehand observe failed; falling back to DOM scan (${String(error?.message || error)}).`, 'warning');
+      return [];
+    });
 
-  if (typeof page.observe === 'function') {
-    // Verified via web: Stagehand observe() is invoked on page with natural-language instruction and optional iframes flag.
-    observed = await page
-      .observe('List visible interactive elements and what action each enables.', { iframes: true })
-      .catch((error) => {
-        pushStatus(`Observe API failed; falling back to DOM scan (${String(error?.message || error)}).`, 'warning');
-        return [];
-      });
-  } else if (typeof page.evaluate === 'function') {
+  if (!observed.length && typeof page.evaluate === 'function') {
     if (!state.observeFallbackLogged) {
-      pushStatus('Observe API unavailable on page wrapper; using DOM interactive-element scan fallback.', 'warning');
+      pushStatus('Stagehand observe returned limited data; using DOM interactive-element scan fallback.', 'warning');
       state.observeFallbackLogged = true;
     }
-
+    observeSource = 'dom-fallback';
     observed = await page
       .evaluate(() => {
         const selectors = [
@@ -210,12 +261,17 @@ async function fireObserve(reason) {
     observedElements: Array.isArray(observed) ? observed : [],
     timestamp: Date.now()
   };
+  state.lastObservedUrl = currentUrl;
 
-  pushStatus(`Observed ${state.lastObserveResult.observedElements.length} elements (${reason}).`, 'status');
+  pushStatus(
+    `Observed ${state.lastObserveResult.observedElements.length} elements (${reason}, source=${observeSource}).`,
+    'status'
+  );
 }
 
 async function runDemoAgent({ voiceSegments, observedElements, currentDraft, pageUrl, correction }) {
   const domain = normalizeDomain(pageUrl);
+  const weakObservedContext = isWeakObservedContext(observedElements);
   const voiceContext = voiceSegments.map((segment) => `- ${segment.transcript}`).join('\n') || '- (none)';
   const observedContext = observedElements.length
     ? observedElements
@@ -229,6 +285,9 @@ async function runDemoAgent({ voiceSegments, observedElements, currentDraft, pag
     : '(No observed interactive elements.)';
 
   pushStatus(`OpenRouter request started for demo synthesis (model=${process.env.DEMO_MODEL || 'google/gemini-2.5-flash'}).`, 'api');
+  if (weakObservedContext) {
+    pushStatus('Demo context warning: observed browser signals are limited; relying mostly on narration.', 'warning');
+  }
   const completion = await openrouter.chat.completions.create({
     model: process.env.DEMO_MODEL || 'google/gemini-2.5-flash',
     temperature: 0.1,
@@ -237,9 +296,21 @@ async function runDemoAgent({ voiceSegments, observedElements, currentDraft, pag
       { role: 'system', content: DEMO_AGENT_SYSTEM_PROMPT },
       {
         role: 'user',
-        content: `Site: ${domain}\nPage URL: ${pageUrl}\nVoice:\n${voiceContext}\n\nObserved elements:\n${observedContext}\n\nCurrent draft:\n${
-          currentDraft || '(none)'
-        }\n\nCorrection from user: ${correction || '(none)'}`
+        content: `Site: ${domain}
+Page URL: ${pageUrl}
+Voice:
+${voiceContext}
+
+Observed elements:
+${observedContext}
+
+Observation quality: ${weakObservedContext ? 'low' : 'normal'}
+If observation quality is low, explicitly mention that you are relying mostly on narration because browser signals are limited.
+
+Current draft:
+${currentDraft || '(none)'}
+
+Correction from user: ${correction || '(none)'}`
       }
     ]
   });
@@ -317,6 +388,9 @@ export async function startDemoSession() {
   state.awaitingConfirmation = null;
   state.observeFallbackLogged = false;
   state.page = await getPage();
+  state.lastObservedUrl = typeof state.page?.url === 'function' ? state.page.url() : '';
+  state.observeInFlight = false;
+  state.queuedObserveReason = null;
 
   const currentUrl = typeof state.page?.url === 'function' ? state.page.url() : '';
   const isBlankPage = !currentUrl || currentUrl === 'about:blank';
@@ -352,6 +426,9 @@ export async function endDemoSession() {
   state.lastObserveResult = null;
   state.awaitingConfirmation = null;
   state.observeFallbackLogged = false;
+  state.lastObservedUrl = '';
+  state.observeInFlight = false;
+  state.queuedObserveReason = null;
   state.page = null;
   if (hadActiveSession) pushStatus('Demo mode ended.', 'status');
 
@@ -372,7 +449,7 @@ export async function handleVoiceSegment(transcript) {
   state.pendingVoice.push({ transcript, timestamp: now });
 
   if (!state.lastObserveResult || now - state.lastObserveResult.timestamp > 3000) {
-    await fireObserve('voice-triggered');
+    await requestObserve('voice-triggered');
   }
 
   const agentResponse = await runDemoAgent({
@@ -435,7 +512,7 @@ export async function finalizeDemoCaptureForReview() {
   }
 
   if (!state.lastObserveResult || Date.now() - state.lastObserveResult.timestamp > 3000) {
-    await fireObserve('review-start');
+    await requestObserve('review-start');
   }
 
   const reviewSegments = state.pendingVoice.length

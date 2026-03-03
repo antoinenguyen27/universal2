@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, session } from 'electron';
 import ipcChannelsModule from './ipc-channels.cjs';
 import { registerMainWindow, pushStatus } from './status-bus.js';
-import { closeStagehand } from './stagehand-manager.js';
+import { closeStagehand, getPage } from './stagehand-manager.js';
 import { transcribeAudio } from '../voice/transcription.js';
 import { speak } from '../voice/tts.js';
 import { runOrchestratorTurn, interruptCurrentTask } from '../agent/orchestrator.js';
@@ -24,7 +24,7 @@ const { IPC_CHANNELS } = ipcChannelsModule;
 let mainWindow = null;
 const runtimeSettings = {
   cuaModel: process.env.CUA_MODEL || 'anthropic/claude-sonnet-4-20250514',
-  orchestratorModel: process.env.ORCHESTRATOR_MODEL || 'inception/mercury',
+  orchestratorModel: process.env.ORCHESTRATOR_MODEL || 'google/gemini-3-flash-preview',
   demoModel: process.env.DEMO_MODEL || 'google/gemini-2.5-flash'
 };
 
@@ -142,7 +142,7 @@ app.on('before-quit', async () => {
 });
 
 ipcMain.handle(IPC_CHANNELS.VOICE_PROCESS, async (_event, payload) => {
-  const { audioBase64, mode, audioFormat } = payload || {};
+  const { audioBase64, mode, audioFormat, demoStage } = payload || {};
   let transcript = '';
 
   try {
@@ -151,6 +151,12 @@ ipcMain.handle(IPC_CHANNELS.VOICE_PROCESS, async (_event, payload) => {
     if (mode === 'interrupt') {
       pushStatus('Voice process routing to interrupt handler.', 'status');
       return interruptCurrentTask();
+    }
+
+    if (mode === 'demo') {
+      const page = await getPage().catch(() => null);
+      const url = typeof page?.url === 'function' ? page.url() : '';
+      if (url) pushStatus(`Demo context URL: ${url}`, 'status');
     }
 
     transcript = await transcribeAudio(audioBase64, { onLog: pushStatus, audioFormat });
@@ -162,36 +168,21 @@ ipcMain.handle(IPC_CHANNELS.VOICE_PROCESS, async (_event, payload) => {
     pushStatus(`Transcription complete (${transcript.length} chars).`, 'api');
 
     if (mode === 'demo') {
-      const wordCount = transcript
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean).length;
-      if (wordCount < 3 || wordCount > 35) {
-        pushStatus(
-          `Demo transcript ignored by length gate (${wordCount} words; allowed 3-35).`,
-          'warning'
-        );
-        return {
-          transcript,
-          response: null,
-          skillWritten: null,
-          ttsAudioBase64: null,
-          ttsMimeType: null
-        };
-      }
-    }
-
-    if (mode === 'demo') {
-      pushStatus('Routing transcript to demo agent.', 'status');
+      pushStatus(`Routing transcript to demo agent (stage=${demoStage || 'capture'}).`, 'status');
       const result = await handleVoiceSegment(transcript);
+      const isCaptureStage = demoStage === 'capture';
       pushStatus('Demo agent response generated.', 'api');
-      const speech = result.agentMessage ? await speak(result.agentMessage) : null;
-      if (speech?.source) {
+      const speech =
+        !isCaptureStage && result.agentMessage ? await speak(result.agentMessage) : null;
+      if (!isCaptureStage && speech?.source) {
         pushStatus(`TTS finished (source=${speech.source}).`, 'api');
+      }
+      if (isCaptureStage) {
+        pushStatus('Demo capture updated. Use End Demo & Review for clarifications and skill creation.', 'status');
       }
       return {
         transcript,
-        response: result.agentMessage,
+        response: isCaptureStage ? null : result.agentMessage,
         skillWritten: result.skillWritten,
         awaitingConfirmation: Boolean(result.awaitingConfirmation),
         ttsAudioBase64: speech?.audioBase64 || null,
@@ -239,6 +230,9 @@ ipcMain.handle(IPC_CHANNELS.DEMO_END, async () => {
 
 ipcMain.handle(IPC_CHANNELS.DEMO_FINALIZE, async () => {
   pushStatus('Demo finalize requested from renderer.', 'status');
+  const page = await getPage().catch(() => null);
+  const url = typeof page?.url === 'function' ? page.url() : '';
+  if (url) pushStatus(`Demo finalize context URL: ${url}`, 'status');
   const result = await finalizeDemoCaptureForReview();
   const speech = result.agentMessage ? await speak(result.agentMessage) : null;
   return {

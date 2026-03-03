@@ -44,7 +44,10 @@ export default function App() {
   const [demoStage, setDemoStage] = useState(DEMO_STAGE.CAPTURE);
   const [demoAwaitingConfirmation, setDemoAwaitingConfirmation] = useState(false);
   const [demoReviewBusy, setDemoReviewBusy] = useState(false);
+  const [demoCanFinalize, setDemoCanFinalize] = useState(false);
   const previousModeRef = useRef(null);
+  const isDemoRecordingRef = useRef(false);
+  const stopDemoAndFlushRef = useRef(async () => {});
 
   const appendStatus = useCallback((type, message) => {
     setStatusItems((prev) => [...prev.slice(-59), toFeedItem(type, message)]);
@@ -73,13 +76,13 @@ export default function App() {
   );
 
   const processSegment = useCallback(
-    async (audioBase64, segmentMode, audioFormat = 'webm') => {
+    async (audioBase64, segmentMode, audioFormat = 'webm', demoStageContext = null) => {
       if (!ua) throw new Error('Electron bridge unavailable (window.ua missing).');
       appendStatus(
         'status',
-        `Sending audio segment for processing (mode=${segmentMode}, format=${audioFormat}).`
+        `Sending audio segment for processing (mode=${segmentMode}, format=${audioFormat}${demoStageContext ? `, stage=${demoStageContext}` : ''}).`
       );
-      const result = await ua.processVoice(audioBase64, segmentMode, audioFormat);
+      const result = await ua.processVoice(audioBase64, segmentMode, audioFormat, demoStageContext);
       appendStatus(
         result.error ? 'error' : 'status',
         result.error
@@ -105,16 +108,25 @@ export default function App() {
     [appendStatus, refreshSkills, ua]
   );
 
-  const { isRecording: isDemoRecording, toggle: toggleDemoRecording } = useDemoRecorder({
-    onLog: (message, type = 'status') => appendStatus(type, message),
-    onSegment: async (audioBase64, audioFormat) => {
-      try {
-        await processSegment(audioBase64, MODES.DEMO, audioFormat);
-      } catch (error) {
-        appendStatus('error', `Demo segment failed: ${error.message}`);
+  const { isRecording: isDemoRecording, toggle: toggleDemoRecording, stopAndFlush: stopDemoAndFlush } =
+    useDemoRecorder({
+      onLog: (message, type = 'status') => appendStatus(type, message),
+      onSegment: async (audioBase64, audioFormat) => {
+        try {
+          await processSegment(audioBase64, MODES.DEMO, audioFormat, DEMO_STAGE.CAPTURE);
+        } catch (error) {
+          appendStatus('error', `Demo segment failed: ${error.message}`);
+        }
       }
-    }
-  });
+    });
+
+  useEffect(() => {
+    isDemoRecordingRef.current = isDemoRecording;
+  }, [isDemoRecording]);
+
+  useEffect(() => {
+    stopDemoAndFlushRef.current = stopDemoAndFlush;
+  }, [stopDemoAndFlush]);
 
   const { isListening: isDemoReplyListening, startListening: startDemoReply, stopListening: stopDemoReply } =
     useWorkRecorder({
@@ -123,7 +135,7 @@ export default function App() {
       onRecording: async (audioBase64, audioFormat) => {
         try {
           setProcessing(true);
-          await processSegment(audioBase64, MODES.DEMO, audioFormat);
+          await processSegment(audioBase64, MODES.DEMO, audioFormat, DEMO_STAGE.REVIEW);
         } catch (error) {
           appendStatus('error', `Demo review reply failed: ${error.message}`);
         } finally {
@@ -180,32 +192,57 @@ export default function App() {
 
   useEffect(() => {
     if (!ua) return;
-    if (mode === MODES.DEMO) {
-      ua.startDemo().catch((error) => appendStatus('error', error.message));
-      setDemoStage(DEMO_STAGE.CAPTURE);
-      setDemoAwaitingConfirmation(false);
-    } else if (previousModeRef.current === MODES.DEMO) {
-      ua.endDemo().catch(() => {});
-      setDemoStage(DEMO_STAGE.CAPTURE);
-      setDemoAwaitingConfirmation(false);
-    }
+    let cancelled = false;
+
+    const syncMode = async () => {
+      if (mode === MODES.DEMO) {
+        setDemoStage(DEMO_STAGE.CAPTURE);
+        setDemoAwaitingConfirmation(false);
+        setDemoCanFinalize(false);
+        try {
+          await ua.startDemo();
+        } catch (error) {
+          if (!cancelled) appendStatus('error', error.message);
+        }
+      } else if (previousModeRef.current === MODES.DEMO) {
+        try {
+          if (isDemoRecordingRef.current) {
+            appendStatus('status', 'Switching out of demo: stopping recording and flushing final segment.');
+            await stopDemoAndFlushRef.current();
+          }
+          await ua.endDemo();
+        } catch (error) {
+          if (!cancelled) appendStatus('error', `Failed to end demo mode cleanly: ${error.message}`);
+        }
+        if (!cancelled) {
+          setDemoStage(DEMO_STAGE.CAPTURE);
+          setDemoAwaitingConfirmation(false);
+          setDemoCanFinalize(false);
+        }
+      }
+    };
+
+    syncMode();
     previousModeRef.current = mode;
+    return () => {
+      cancelled = true;
+    };
   }, [mode, appendStatus, ua]);
 
   const finalizeDemoCapture = useCallback(async () => {
-    if (!ua || demoReviewBusy) return;
+    if (!ua || demoReviewBusy || !demoCanFinalize) return;
     setDemoReviewBusy(true);
     try {
       if (isDemoRecording) {
-        appendStatus('status', 'End Demo requested: stopping recording first.');
-        toggleDemoRecording();
-        await new Promise((resolve) => setTimeout(resolve, 350));
+        appendStatus('status', 'End Demo requested: stopping recording and flushing final segment.');
+        await stopDemoAndFlush();
       }
 
       const result = await ua.finalizeDemo();
       if (result.response) appendStatus('agent', result.response);
       setDemoAwaitingConfirmation(Boolean(result.awaitingConfirmation));
       setDemoStage(DEMO_STAGE.REVIEW);
+      setDemoCanFinalize(false);
       if (result.skillWritten) await refreshSkills();
       if (result.ttsAudioBase64) {
         await playAudioFromBase64(result.ttsAudioBase64, result.ttsMimeType || 'audio/mpeg');
@@ -215,7 +252,7 @@ export default function App() {
     } finally {
       setDemoReviewBusy(false);
     }
-  }, [appendStatus, demoReviewBusy, isDemoRecording, refreshSkills, toggleDemoRecording, ua]);
+  }, [appendStatus, demoCanFinalize, demoReviewBusy, isDemoRecording, refreshSkills, stopDemoAndFlush, ua]);
 
   const createSkillFromReview = useCallback(async () => {
     if (!ua || demoReviewBusy) return;
@@ -227,6 +264,7 @@ export default function App() {
       if (result.skillWritten) {
         await refreshSkills();
         setDemoStage(DEMO_STAGE.CAPTURE);
+        setDemoCanFinalize(false);
       }
       if (result.ttsAudioBase64) {
         await playAudioFromBase64(result.ttsAudioBase64, result.ttsMimeType || 'audio/mpeg');
@@ -243,8 +281,8 @@ export default function App() {
       mode === MODES.DEMO
         ? demoStage === DEMO_STAGE.CAPTURE
           ? isDemoRecording
-            ? 'Demo Mode: recording continuously with VAD segmenting'
-            : 'Demo Mode: click to start narration'
+            ? 'Demo Capture: recording continuously with VAD segmenting'
+            : 'Demo Capture: click to start recording'
           : demoAwaitingConfirmation
             ? 'Demo Review: ready to create skill or apply corrections'
             : 'Demo Review: answer clarifying questions'
@@ -295,6 +333,11 @@ export default function App() {
                       ? 'Demo narrate button clicked: stopping recording.'
                       : 'Demo narrate button clicked: starting recording.'
                   );
+                  if (isDemoRecording) {
+                    setDemoCanFinalize(true);
+                  } else {
+                    setDemoCanFinalize(false);
+                  }
                   toggleDemoRecording();
                 }}
                 className={`w-full rounded-xl px-4 py-5 text-lg font-semibold transition ${
@@ -303,18 +346,20 @@ export default function App() {
                     : 'bg-mint text-slate-950 hover:bg-emerald-400'
                 } ${processing || demoReviewBusy ? 'cursor-not-allowed opacity-70' : ''}`}
               >
-                {isDemoRecording ? 'Stop Narrating' : 'Start Narrating'}
+                {isDemoRecording ? 'Stop Recording' : 'Start Recording'}
               </button>
-              <button
-                type="button"
-                disabled={processing || demoReviewBusy}
-                onClick={finalizeDemoCapture}
-                className={`w-full rounded-xl border border-slate-600 bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:bg-slate-700 ${
-                  processing || demoReviewBusy ? 'cursor-not-allowed opacity-70' : ''
-                }`}
-              >
-                End Demo
-              </button>
+              {demoCanFinalize ? (
+                <button
+                  type="button"
+                  disabled={processing || demoReviewBusy || isDemoRecording}
+                  onClick={finalizeDemoCapture}
+                  className={`w-full rounded-xl border border-slate-600 bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:bg-slate-700 ${
+                    processing || demoReviewBusy || isDemoRecording ? 'cursor-not-allowed opacity-70' : ''
+                  }`}
+                >
+                  End Demo & Review
+                </button>
+              ) : null}
             </>
           ) : (
             <>
@@ -357,6 +402,7 @@ export default function App() {
                 disabled={processing || demoReviewBusy}
                 onClick={() => {
                   setDemoStage(DEMO_STAGE.CAPTURE);
+                  setDemoCanFinalize(false);
                   appendStatus('status', 'Returned to demo capture mode.');
                 }}
                 className={`w-full rounded-xl border border-slate-600 bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:bg-slate-700 ${
@@ -383,7 +429,6 @@ export default function App() {
           onMouseLeave={
             isListening
               ? () => {
-                  appendStatus('status', 'Work speak button mouse left: recording stopped.');
                   stopListening();
                 }
               : undefined
