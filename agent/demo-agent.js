@@ -21,7 +21,8 @@ const state = {
   observeTimer: null,
   page: null,
   listenersInstalled: false,
-  awaitingConfirmation: null
+  awaitingConfirmation: null,
+  observeFallbackLogged: false
 };
 
 function isConfirming(text) {
@@ -40,7 +41,7 @@ function scheduleObserve(reason) {
   if (!state.active) return;
   clearTimeout(state.observeTimer);
   state.observeTimer = setTimeout(() => {
-    fireObserve(reason).catch((error) => pushStatus(`Observe failed: ${error.message}`));
+    fireObserve(reason).catch((error) => pushStatus(`Observe failed: ${error.message}`, 'error'));
   }, 600);
 }
 
@@ -54,7 +55,7 @@ async function installPageListeners(page) {
     } catch (error) {
       const message = String(error?.message || error);
       if (/Unsupported event/i.test(message)) {
-        pushStatus(onUnsupportedMessage);
+        pushStatus(onUnsupportedMessage, 'warning');
         return false;
       }
       throw error;
@@ -88,7 +89,7 @@ async function installPageListeners(page) {
       })
       .catch(() => {});
   } else {
-    pushStatus('DOM bridge unavailable on this page wrapper; relying on voice-triggered observe.');
+    pushStatus('DOM bridge unavailable on this page wrapper; relying on voice-triggered observe.', 'warning');
   }
 
   if (typeof page.evaluate === 'function') {
@@ -150,10 +151,59 @@ async function fireObserve(reason) {
   if (typeof page.waitForLoadState === 'function') {
     await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
   }
-  // Verified via web: Stagehand observe() is invoked on page with natural-language instruction and optional iframes flag.
-  const observed = await page
-    .observe('List visible interactive elements and what action each enables.', { iframes: true })
-    .catch(() => []);
+  let observed = [];
+
+  if (typeof page.observe === 'function') {
+    // Verified via web: Stagehand observe() is invoked on page with natural-language instruction and optional iframes flag.
+    observed = await page
+      .observe('List visible interactive elements and what action each enables.', { iframes: true })
+      .catch((error) => {
+        pushStatus(`Observe API failed; falling back to DOM scan (${String(error?.message || error)}).`, 'warning');
+        return [];
+      });
+  } else if (typeof page.evaluate === 'function') {
+    if (!state.observeFallbackLogged) {
+      pushStatus('Observe API unavailable on page wrapper; using DOM interactive-element scan fallback.', 'warning');
+      state.observeFallbackLogged = true;
+    }
+
+    observed = await page
+      .evaluate(() => {
+        const selectors = [
+          'a[href]',
+          'button',
+          'input:not([type="hidden"])',
+          'textarea',
+          'select',
+          '[role="button"]',
+          '[role="link"]',
+          '[role="menuitem"]',
+          '[tabindex]'
+        ];
+        const nodes = Array.from(document.querySelectorAll(selectors.join(',')));
+        const seen = new Set();
+        return nodes
+          .filter((node) => {
+            const rect = node.getBoundingClientRect();
+            const style = window.getComputedStyle(node);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          })
+          .map((node) => {
+            const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+            const aria = (node.getAttribute('aria-label') || '').trim();
+            const placeholder = (node.getAttribute('placeholder') || '').trim();
+            const title = (node.getAttribute('title') || '').trim();
+            const description = text || aria || placeholder || title || node.tagName.toLowerCase();
+            const key = `${node.tagName}|${description}`;
+            if (seen.has(key)) return null;
+            seen.add(key);
+            return { description, method: 'act' };
+          })
+          .filter(Boolean)
+          .slice(0, 25);
+      })
+      .catch(() => []);
+  }
 
   state.lastObserveResult = {
     reason,
@@ -161,7 +211,7 @@ async function fireObserve(reason) {
     timestamp: Date.now()
   };
 
-  pushStatus(`Observed ${state.lastObserveResult.observedElements.length} elements (${reason}).`);
+  pushStatus(`Observed ${state.lastObserveResult.observedElements.length} elements (${reason}).`, 'status');
 }
 
 async function runDemoAgent({ voiceSegments, observedElements, currentDraft, pageUrl, correction }) {
@@ -178,6 +228,7 @@ async function runDemoAgent({ voiceSegments, observedElements, currentDraft, pag
         .join('\n')
     : '(No observed interactive elements.)';
 
+  pushStatus(`OpenRouter request started for demo synthesis (model=${process.env.DEMO_MODEL || 'google/gemini-2.5-flash'}).`, 'api');
   const completion = await openrouter.chat.completions.create({
     model: process.env.DEMO_MODEL || 'google/gemini-2.5-flash',
     temperature: 0.1,
@@ -192,6 +243,7 @@ async function runDemoAgent({ voiceSegments, observedElements, currentDraft, pag
       }
     ]
   });
+  pushStatus('OpenRouter demo synthesis response received.', 'api');
 
   const payload = completion.choices[0]?.message?.content || '{}';
   return JSON.parse(payload);
@@ -202,21 +254,7 @@ async function handleConfirmationTranscript(transcript) {
   if (!pending) return null;
 
   if (isConfirming(transcript)) {
-    const saved = await writeSkillFromDemo({
-      domain: pending.domain,
-      skillName: pending.skillName,
-      finalSkill: pending.finalSkill
-    });
-
-    state.awaitingConfirmation = null;
-    state.currentSkillDraft = null;
-    state.pendingVoice = [];
-
-    pushStatus(`Skill saved: ${saved.domain}/${saved.filename}`);
-    return {
-      agentMessage: `Saved '${pending.skillName}' for ${pending.domain}.`,
-      skillWritten: saved
-    };
+    return saveCurrentPendingSkill();
   }
 
   const revised = await runDemoAgent({
@@ -238,7 +276,36 @@ async function handleConfirmationTranscript(transcript) {
 
   return {
     agentMessage: revised.message || 'Updated draft based on your correction. Confirm when ready.',
-    skillWritten: null
+    skillWritten: null,
+    awaitingConfirmation: Boolean(state.awaitingConfirmation)
+  };
+}
+
+async function saveCurrentPendingSkill() {
+  const pending = state.awaitingConfirmation;
+  if (!pending) {
+    return {
+      agentMessage: 'I still need to finalize the draft before saving. Continue review first.',
+      skillWritten: null,
+      awaitingConfirmation: false
+    };
+  }
+
+  const saved = await writeSkillFromDemo({
+    domain: pending.domain,
+    skillName: pending.skillName,
+    finalSkill: pending.finalSkill
+  });
+
+  state.awaitingConfirmation = null;
+  state.currentSkillDraft = null;
+  state.pendingVoice = [];
+
+  pushStatus(`Skill saved: ${saved.domain}/${saved.filename}`, 'status');
+  return {
+    agentMessage: `Saved '${pending.skillName}' for ${pending.domain}.`,
+    skillWritten: saved,
+    awaitingConfirmation: false
   };
 }
 
@@ -248,6 +315,7 @@ export async function startDemoSession() {
   state.currentSkillDraft = null;
   state.lastObserveResult = null;
   state.awaitingConfirmation = null;
+  state.observeFallbackLogged = false;
   state.page = await getPage();
 
   const currentUrl = typeof state.page?.url === 'function' ? state.page.url() : '';
@@ -260,7 +328,7 @@ export async function startDemoSession() {
   }
 
   await installPageListeners(state.page);
-  pushStatus('Demo mode active. Narrate your actions while demonstrating in Chrome.');
+  pushStatus('Demo mode active. Narrate your actions while demonstrating in Chrome.', 'status');
 }
 
 export async function endDemoSession() {
@@ -283,15 +351,16 @@ export async function endDemoSession() {
   state.currentSkillDraft = null;
   state.lastObserveResult = null;
   state.awaitingConfirmation = null;
+  state.observeFallbackLogged = false;
   state.page = null;
-  if (hadActiveSession) pushStatus('Demo mode ended.');
+  if (hadActiveSession) pushStatus('Demo mode ended.', 'status');
 
   return summary;
 }
 
 export async function handleVoiceSegment(transcript) {
   if (!state.active) {
-    return { agentMessage: 'Demo mode is not active.', skillWritten: null };
+    return { agentMessage: 'Demo mode is not active.', skillWritten: null, awaitingConfirmation: false };
   }
 
   if (state.awaitingConfirmation) {
@@ -328,12 +397,88 @@ export async function handleVoiceSegment(transcript) {
       agentMessage:
         agentResponse.message ||
         `I have a complete draft for '${state.awaitingConfirmation.skillName}'. Confirm to save.`,
-      skillWritten: null
+      skillWritten: null,
+      awaitingConfirmation: true
     };
   }
 
   return {
     agentMessage: agentResponse.message || 'Captured. Continue demonstrating or refine the draft.',
-    skillWritten: null
+    skillWritten: null,
+    awaitingConfirmation: false
   };
+}
+
+export async function finalizeDemoCaptureForReview() {
+  if (!state.active) {
+    return {
+      agentMessage: 'Demo mode is not active.',
+      skillWritten: null,
+      awaitingConfirmation: false
+    };
+  }
+
+  if (state.awaitingConfirmation) {
+    return {
+      agentMessage: `I have a complete draft for '${state.awaitingConfirmation.skillName}'. Click Create Skill to save, or reply with corrections.`,
+      skillWritten: null,
+      awaitingConfirmation: true
+    };
+  }
+
+  if (!state.pendingVoice.length && !state.currentSkillDraft) {
+    return {
+      agentMessage: 'No narration captured yet. Start narrating before ending demo.',
+      skillWritten: null,
+      awaitingConfirmation: false
+    };
+  }
+
+  if (!state.lastObserveResult || Date.now() - state.lastObserveResult.timestamp > 3000) {
+    await fireObserve('review-start');
+  }
+
+  const reviewSegments = state.pendingVoice.length
+    ? state.pendingVoice
+    : [{ transcript: 'User ended demo capture and wants to finalize the skill.', timestamp: Date.now() }];
+
+  const agentResponse = await runDemoAgent({
+    voiceSegments: reviewSegments,
+    observedElements: state.lastObserveResult?.observedElements || [],
+    currentDraft: state.currentSkillDraft,
+    pageUrl: state.page?.url() || 'https://example.com',
+    correction:
+      'User ended demo capture and entered review. Ask one concise clarifying question if needed, otherwise finalize.'
+  });
+
+  if (agentResponse.updatedDraft) {
+    state.currentSkillDraft = agentResponse.updatedDraft;
+  }
+
+  if (agentResponse.skillComplete && agentResponse.finalSkill) {
+    state.awaitingConfirmation = {
+      finalSkill: agentResponse.finalSkill,
+      skillName: agentResponse.skillName || 'new-skill',
+      domain: normalizeDomain(state.page?.url() || 'https://example.com')
+    };
+    return {
+      agentMessage:
+        agentResponse.message ||
+        `I have a complete draft for '${state.awaitingConfirmation.skillName}'. Click Create Skill to save, or reply with corrections.`,
+      skillWritten: null,
+      awaitingConfirmation: true
+    };
+  }
+
+  return {
+    agentMessage:
+      agentResponse.message ||
+      'I need one more clarification before I can finalize the skill. Reply with the missing detail.',
+    skillWritten: null,
+    awaitingConfirmation: false
+  };
+}
+
+export async function saveDraftFromReview() {
+  return saveCurrentPendingSkill();
 }

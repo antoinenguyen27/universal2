@@ -8,7 +8,13 @@ import { closeStagehand } from './stagehand-manager.js';
 import { transcribeAudio } from '../voice/transcription.js';
 import { speak } from '../voice/tts.js';
 import { runOrchestratorTurn, interruptCurrentTask } from '../agent/orchestrator.js';
-import { startDemoSession, endDemoSession, handleVoiceSegment } from '../agent/demo-agent.js';
+import {
+  startDemoSession,
+  endDemoSession,
+  handleVoiceSegment,
+  finalizeDemoCaptureForReview,
+  saveDraftFromReview
+} from '../agent/demo-agent.js';
 import { clearSessionMemory } from '../memory/session-memory.js';
 import { loadAllSkills } from '../skills/skill-store.js';
 
@@ -136,34 +142,70 @@ app.on('before-quit', async () => {
 });
 
 ipcMain.handle(IPC_CHANNELS.VOICE_PROCESS, async (_event, payload) => {
-  const { audioBase64, mode } = payload || {};
+  const { audioBase64, mode, audioFormat } = payload || {};
+  let transcript = '';
 
   try {
+    pushStatus(`Voice process invoked (mode=${mode || 'unknown'}, format=${audioFormat || 'webm'}).`, 'status');
+
     if (mode === 'interrupt') {
+      pushStatus('Voice process routing to interrupt handler.', 'status');
       return interruptCurrentTask();
     }
 
-    const transcript = await transcribeAudio(audioBase64);
+    transcript = await transcribeAudio(audioBase64, { onLog: pushStatus, audioFormat });
     if (!transcript) {
+      pushStatus('Transcription returned empty transcript.', 'warning');
       return { transcript: '', response: null, ttsAudioBase64: null, ttsMimeType: null };
     }
 
-    pushStatus(`Heard: ${transcript}`);
+    pushStatus(`Transcription complete (${transcript.length} chars).`, 'api');
 
     if (mode === 'demo') {
+      const wordCount = transcript
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean).length;
+      if (wordCount < 3 || wordCount > 35) {
+        pushStatus(
+          `Demo transcript ignored by length gate (${wordCount} words; allowed 3-35).`,
+          'warning'
+        );
+        return {
+          transcript,
+          response: null,
+          skillWritten: null,
+          ttsAudioBase64: null,
+          ttsMimeType: null
+        };
+      }
+    }
+
+    if (mode === 'demo') {
+      pushStatus('Routing transcript to demo agent.', 'status');
       const result = await handleVoiceSegment(transcript);
+      pushStatus('Demo agent response generated.', 'api');
       const speech = result.agentMessage ? await speak(result.agentMessage) : null;
+      if (speech?.source) {
+        pushStatus(`TTS finished (source=${speech.source}).`, 'api');
+      }
       return {
         transcript,
         response: result.agentMessage,
         skillWritten: result.skillWritten,
+        awaitingConfirmation: Boolean(result.awaitingConfirmation),
         ttsAudioBase64: speech?.audioBase64 || null,
         ttsMimeType: speech?.mimeType || null
       };
     }
 
+    pushStatus('Routing transcript to work orchestrator.', 'status');
     const result = await runOrchestratorTurn(transcript);
+    pushStatus('Work agent response generated.', 'api');
     const speech = result.response ? await speak(result.response) : null;
+    if (speech?.source) {
+      pushStatus(`TTS finished (source=${speech.source}).`, 'api');
+    }
 
     return {
       transcript,
@@ -172,9 +214,9 @@ ipcMain.handle(IPC_CHANNELS.VOICE_PROCESS, async (_event, payload) => {
       ttsMimeType: speech?.mimeType || null
     };
   } catch (error) {
-    pushStatus(`Error: ${error.message}`);
+    pushStatus(`Error: ${error.message}`, 'error');
     return {
-      transcript: '',
+      transcript,
       response: `Error: ${error.message}`,
       ttsAudioBase64: null,
       ttsMimeType: null,
@@ -184,16 +226,47 @@ ipcMain.handle(IPC_CHANNELS.VOICE_PROCESS, async (_event, payload) => {
 });
 
 ipcMain.handle(IPC_CHANNELS.DEMO_START, async () => {
+  pushStatus('Demo start requested from renderer.', 'status');
   await startDemoSession();
   return { ok: true };
 });
 
 ipcMain.handle(IPC_CHANNELS.DEMO_END, async () => {
+  pushStatus('Demo end requested from renderer.', 'status');
   const summary = await endDemoSession();
   return { ok: true, summary };
 });
 
+ipcMain.handle(IPC_CHANNELS.DEMO_FINALIZE, async () => {
+  pushStatus('Demo finalize requested from renderer.', 'status');
+  const result = await finalizeDemoCaptureForReview();
+  const speech = result.agentMessage ? await speak(result.agentMessage) : null;
+  return {
+    ok: true,
+    response: result.agentMessage,
+    skillWritten: result.skillWritten || null,
+    awaitingConfirmation: Boolean(result.awaitingConfirmation),
+    ttsAudioBase64: speech?.audioBase64 || null,
+    ttsMimeType: speech?.mimeType || null
+  };
+});
+
+ipcMain.handle(IPC_CHANNELS.DEMO_SAVE, async () => {
+  pushStatus('Demo save requested from renderer.', 'status');
+  const result = await saveDraftFromReview();
+  const speech = result.agentMessage ? await speak(result.agentMessage) : null;
+  return {
+    ok: true,
+    response: result.agentMessage,
+    skillWritten: result.skillWritten || null,
+    awaitingConfirmation: Boolean(result.awaitingConfirmation),
+    ttsAudioBase64: speech?.audioBase64 || null,
+    ttsMimeType: speech?.mimeType || null
+  };
+});
+
 ipcMain.handle(IPC_CHANNELS.WORK_STOP, async () => {
+  pushStatus('Work stop requested from renderer.', 'status');
   await interruptCurrentTask();
   clearSessionMemory();
   return { ok: true };

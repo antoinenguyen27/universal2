@@ -13,7 +13,7 @@ function startNoProgressWatchdog() {
     if (!cuaRunning) return;
     const elapsed = Date.now() - lastProgressAt;
     if (elapsed > 5 * 60 * 1000) {
-      pushStatus('Warning: no browser progress for over 5 minutes. You can say stop and retry.');
+      pushStatus('Warning: no browser progress for over 5 minutes. You can say stop and retry.', 'warning');
       lastProgressAt = Date.now();
     }
   }, 10_000);
@@ -48,7 +48,8 @@ export async function executeCUAInstruction(decision) {
   lastProgressAt = Date.now();
   startNoProgressWatchdog();
 
-  pushStatus(`Executing: ${decision.taskDescription}`);
+  pushStatus(`Executing: ${decision.taskDescription}`, 'status');
+  pushStatus(`CUA provider ready (model=${provider.model}, endpoint=https://openrouter.ai/api/v1).`, 'api');
 
   try {
     // Verified via web: Stagehand agent() accepts model object with modelName/apiKey/baseURL for OpenAI-compatible endpoints.
@@ -65,7 +66,7 @@ export async function executeCUAInstruction(decision) {
         onStepFinish: (step) => {
           const summary = step?.text || step?.description || 'Completed browser step';
           lastProgressAt = Date.now();
-          pushStatus(summary);
+          pushStatus(summary, 'status');
         }
       }
     });
@@ -83,10 +84,12 @@ export async function executeCUAInstruction(decision) {
     };
   } catch (error) {
     if (activeAbortController?.signal.aborted) {
+      pushStatus('CUA execution interrupted by user.', 'warning');
       return { success: false, interrupted: true, summary: 'Execution interrupted by user.' };
     }
 
     const details = String(error?.message || error || 'unknown error');
+    pushStatus(`CUA execution error: ${details}`, 'error');
     if (/login|sign in|2fa|verification|captcha/i.test(details)) {
       return {
         success: false,
@@ -111,7 +114,7 @@ export async function pauseCUA() {
   if (!cuaRunning || !activeAbortController) return { ok: true, interrupted: false };
 
   activeAbortController.abort();
-  pushStatus('Paused current task. Listening for your next instruction.');
+  pushStatus('Paused current task. Listening for your next instruction.', 'status');
   return { ok: true, interrupted: true };
 }
 

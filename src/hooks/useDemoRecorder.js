@@ -1,20 +1,12 @@
 import { useRef, useState, useCallback } from 'react';
+import { toTranscriptionPayload } from '../utils/audioPayload.js';
 
 const SILENCE_THRESHOLD = 0.01;
-const SILENCE_DURATION_MS = 800;
+const SILENCE_DURATION_MS = 3200;
+const INITIAL_SILENCE_GRACE_MS = 10000;
+const MIN_SEGMENT_DURATION_MS = 1200;
 
-function blobToBase64(blob) {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const dataUrl = String(reader.result || '');
-      resolve(dataUrl.includes(',') ? dataUrl.split(',')[1] : '');
-    };
-    reader.readAsDataURL(blob);
-  });
-}
-
-export function useDemoRecorder({ onSegment }) {
+export function useDemoRecorder({ onSegment, onLog }) {
   const [isRecording, setIsRecording] = useState(false);
   const streamRef = useRef(null);
   const audioContextRef = useRef(null);
@@ -24,6 +16,8 @@ export function useDemoRecorder({ onSegment }) {
   const mediaRecorderRef = useRef(null);
   const silenceTimerRef = useRef(null);
   const segmentQueueRef = useRef(Promise.resolve());
+  const recordingStartedAtRef = useRef(0);
+  const hasDetectedSpeechRef = useRef(false);
 
   const setupRecorder = useCallback(() => {
     const stream = streamRef.current;
@@ -40,12 +34,33 @@ export function useDemoRecorder({ onSegment }) {
 
   const processSegmentBlob = useCallback(
     async (blob) => {
-      if (blob.size < 1000) return;
-      const base64 = await blobToBase64(blob);
-      if (!base64) return;
-      await onSegment(base64);
+      if (blob.size < 1000) {
+        onLog?.('Demo segment skipped: audio too short or silent (under 1000 bytes).', 'warning');
+        return;
+      }
+      const payload = await toTranscriptionPayload(blob);
+      if (!payload.audioBase64) {
+        onLog?.('Demo segment conversion failed: base64 payload empty.', 'error');
+        return;
+      }
+      if (typeof payload.durationMs === 'number' && payload.durationMs < MIN_SEGMENT_DURATION_MS) {
+        onLog?.(
+          `Demo segment skipped: duration too short (${payload.durationMs}ms < ${MIN_SEGMENT_DURATION_MS}ms).`,
+          'warning'
+        );
+        return;
+      }
+      if (payload.convertedToWav) {
+        onLog?.(
+          `Demo segment ready: ${blob.size} bytes, ${payload.durationMs || 'unknown'}ms. Converted to wav and sending for transcription.`,
+          'status'
+        );
+      } else {
+        onLog?.(`Demo segment ready: ${blob.size} bytes. Sending original webm for transcription.`, 'warning');
+      }
+      await onSegment(payload.audioBase64, payload.audioFormat);
     },
-    [onSegment]
+    [onLog, onSegment]
   );
 
   const cutSegment = useCallback(
@@ -57,7 +72,11 @@ export function useDemoRecorder({ onSegment }) {
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         chunksRef.current = [];
 
-        segmentQueueRef.current = segmentQueueRef.current.then(() => processSegmentBlob(blob));
+        segmentQueueRef.current = segmentQueueRef.current
+          .then(() => processSegmentBlob(blob))
+          .catch((error) => {
+            onLog?.(`Demo segment processing failed: ${String(error?.message || error)}`, 'error');
+          });
 
         if (!finalCut && isRecording) {
           setupRecorder();
@@ -66,11 +85,12 @@ export function useDemoRecorder({ onSegment }) {
 
       recorder.stop();
     },
-    [isRecording, processSegmentBlob, setupRecorder]
+    [isRecording, onLog, processSegmentBlob, setupRecorder]
   );
 
   const startRecording = useCallback(async () => {
     if (isRecording) return;
+    onLog?.('Demo recorder starting microphone capture.', 'status');
 
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
@@ -79,6 +99,8 @@ export function useDemoRecorder({ onSegment }) {
     streamRef.current = stream;
     audioContextRef.current = new AudioContext({ sampleRate: 16000 });
     sourceRef.current = audioContextRef.current.createMediaStreamSource(stream);
+    recordingStartedAtRef.current = Date.now();
+    hasDetectedSpeechRef.current = false;
 
     const processor = audioContextRef.current.createScriptProcessor(2048, 1, 1);
     processorRef.current = processor;
@@ -86,17 +108,25 @@ export function useDemoRecorder({ onSegment }) {
     processor.onaudioprocess = (event) => {
       const input = event.inputBuffer.getChannelData(0);
       const rms = Math.sqrt(input.reduce((sum, sample) => sum + sample * sample, 0) / input.length);
+      const isSilent = rms < SILENCE_THRESHOLD;
+      const withinInitialSilenceGrace =
+        !hasDetectedSpeechRef.current &&
+        Date.now() - recordingStartedAtRef.current < INITIAL_SILENCE_GRACE_MS;
 
-      if (rms < SILENCE_THRESHOLD) {
+      if (isSilent) {
+        if (withinInitialSilenceGrace) return;
         if (!silenceTimerRef.current) {
           silenceTimerRef.current = setTimeout(() => {
             cutSegment(false);
             silenceTimerRef.current = null;
           }, SILENCE_DURATION_MS);
         }
-      } else if (silenceTimerRef.current) {
-        clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = null;
+      } else {
+        hasDetectedSpeechRef.current = true;
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
       }
     };
 
@@ -105,10 +135,12 @@ export function useDemoRecorder({ onSegment }) {
     chunksRef.current = [];
     setupRecorder();
     setIsRecording(true);
-  }, [cutSegment, isRecording, setupRecorder]);
+    onLog?.('Demo recorder active.', 'status');
+  }, [cutSegment, isRecording, onLog, setupRecorder]);
 
   const stopRecording = useCallback(() => {
     if (!isRecording) return;
+    onLog?.('Demo recorder stopping microphone capture.', 'status');
 
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
@@ -128,10 +160,13 @@ export function useDemoRecorder({ onSegment }) {
       audioContextRef.current = null;
       streamRef.current = null;
       mediaRecorderRef.current = null;
+      recordingStartedAtRef.current = 0;
+      hasDetectedSpeechRef.current = false;
 
       setIsRecording(false);
+      onLog?.('Demo recorder stopped.', 'status');
     }, 220);
-  }, [cutSegment, isRecording]);
+  }, [cutSegment, isRecording, onLog]);
 
   const toggle = useCallback(() => {
     if (isRecording) stopRecording();

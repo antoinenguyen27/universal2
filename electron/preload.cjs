@@ -4,6 +4,8 @@ const IPC_CHANNELS = {
   VOICE_PROCESS: 'voice:process',
   DEMO_START: 'demo:start',
   DEMO_END: 'demo:end',
+  DEMO_FINALIZE: 'demo:finalize',
+  DEMO_SAVE: 'demo:save',
   WORK_STOP: 'work:stop',
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
@@ -14,10 +16,12 @@ const IPC_CHANNELS = {
 };
 
 contextBridge.exposeInMainWorld('ua', {
-  processVoice: (audioBase64, mode) =>
-    ipcRenderer.invoke(IPC_CHANNELS.VOICE_PROCESS, { audioBase64, mode }),
+  processVoice: (audioBase64, mode, audioFormat) =>
+    ipcRenderer.invoke(IPC_CHANNELS.VOICE_PROCESS, { audioBase64, mode, audioFormat }),
   startDemo: () => ipcRenderer.invoke(IPC_CHANNELS.DEMO_START),
   endDemo: () => ipcRenderer.invoke(IPC_CHANNELS.DEMO_END),
+  finalizeDemo: () => ipcRenderer.invoke(IPC_CHANNELS.DEMO_FINALIZE),
+  saveDemoSkill: () => ipcRenderer.invoke(IPC_CHANNELS.DEMO_SAVE),
   stopWork: () => ipcRenderer.invoke(IPC_CHANNELS.WORK_STOP),
   getSettings: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET),
   setSettings: (patch) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET, patch),

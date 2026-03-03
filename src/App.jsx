@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import SkillLog from './components/SkillLog.jsx';
 import SettingsPanel from './components/SettingsPanel.jsx';
 import StatusFeed from './components/StatusFeed.jsx';
@@ -8,6 +8,10 @@ import { useWorkRecorder } from './hooks/useWorkRecorder.js';
 const MODES = {
   DEMO: 'demo',
   WORK: 'work'
+};
+const DEMO_STAGE = {
+  CAPTURE: 'capture',
+  REVIEW: 'review'
 };
 
 function toFeedItem(type, message) {
@@ -37,6 +41,10 @@ export default function App() {
   const [settings, setSettings] = useState({});
   const [processing, setProcessing] = useState(false);
   const [cuaRunning, setCUARunning] = useState(false);
+  const [demoStage, setDemoStage] = useState(DEMO_STAGE.CAPTURE);
+  const [demoAwaitingConfirmation, setDemoAwaitingConfirmation] = useState(false);
+  const [demoReviewBusy, setDemoReviewBusy] = useState(false);
+  const previousModeRef = useRef(null);
 
   const appendStatus = useCallback((type, message) => {
     setStatusItems((prev) => [...prev.slice(-59), toFeedItem(type, message)]);
@@ -65,12 +73,31 @@ export default function App() {
   );
 
   const processSegment = useCallback(
-    async (audioBase64, segmentMode) => {
+    async (audioBase64, segmentMode, audioFormat = 'webm') => {
       if (!ua) throw new Error('Electron bridge unavailable (window.ua missing).');
-      const result = await ua.processVoice(audioBase64, segmentMode);
+      appendStatus(
+        'status',
+        `Sending audio segment for processing (mode=${segmentMode}, format=${audioFormat}).`
+      );
+      const result = await ua.processVoice(audioBase64, segmentMode, audioFormat);
+      appendStatus(
+        result.error ? 'error' : 'status',
+        result.error
+          ? `Voice processing returned an error (mode=${segmentMode}).`
+          : `Voice processing completed (mode=${segmentMode}).`
+      );
       if (result.transcript) appendStatus('transcript', result.transcript);
       if (result.response) appendStatus('agent', result.response);
-      if (result.skillWritten) await refreshSkills();
+      if (segmentMode === MODES.DEMO && typeof result.awaitingConfirmation === 'boolean') {
+        setDemoAwaitingConfirmation(result.awaitingConfirmation);
+      }
+      if (result.skillWritten) {
+        await refreshSkills();
+        if (segmentMode === MODES.DEMO) {
+          setDemoStage(DEMO_STAGE.CAPTURE);
+          setDemoAwaitingConfirmation(false);
+        }
+      }
       if (result.ttsAudioBase64) {
         await playAudioFromBase64(result.ttsAudioBase64, result.ttsMimeType || 'audio/mpeg');
       }
@@ -79,26 +106,44 @@ export default function App() {
   );
 
   const { isRecording: isDemoRecording, toggle: toggleDemoRecording } = useDemoRecorder({
-    onSegment: async (audioBase64) => {
+    onLog: (message, type = 'status') => appendStatus(type, message),
+    onSegment: async (audioBase64, audioFormat) => {
       try {
-        await processSegment(audioBase64, MODES.DEMO);
+        await processSegment(audioBase64, MODES.DEMO, audioFormat);
       } catch (error) {
         appendStatus('error', `Demo segment failed: ${error.message}`);
       }
     }
   });
 
+  const { isListening: isDemoReplyListening, startListening: startDemoReply, stopListening: stopDemoReply } =
+    useWorkRecorder({
+      enableStopWordDetection: false,
+      onInterrupt: undefined,
+      onRecording: async (audioBase64, audioFormat) => {
+        try {
+          setProcessing(true);
+          await processSegment(audioBase64, MODES.DEMO, audioFormat);
+        } catch (error) {
+          appendStatus('error', `Demo review reply failed: ${error.message}`);
+        } finally {
+          setProcessing(false);
+        }
+      }
+    });
+
   const { isListening, startListening, stopListening } = useWorkRecorder({
     enableStopWordDetection: cuaRunning,
+    onLog: (message, type = 'status') => appendStatus(type, message),
     onInterrupt: async () => {
       appendStatus('interrupt', 'Stop word detected. Interrupting current CUA task.');
       if (ua) await ua.interruptCUA();
     },
-    onRecording: async (audioBase64) => {
+    onRecording: async (audioBase64, audioFormat) => {
       try {
         setProcessing(true);
         appendStatus('status', 'Thinking...');
-        await processSegment(audioBase64, MODES.WORK);
+        await processSegment(audioBase64, MODES.WORK, audioFormat);
       } catch (error) {
         appendStatus('error', `Work command failed: ${error.message}`);
       } finally {
@@ -120,7 +165,7 @@ export default function App() {
     refreshSettings();
 
     const unsubscribeStatus = ua.onStatus((payload) => {
-      appendStatus('status', payload.message);
+      appendStatus(payload.type || 'status', payload.message);
     });
 
     const unsubscribeCUA = ua.onCUAState((payload) => {
@@ -137,21 +182,76 @@ export default function App() {
     if (!ua) return;
     if (mode === MODES.DEMO) {
       ua.startDemo().catch((error) => appendStatus('error', error.message));
-    } else {
+      setDemoStage(DEMO_STAGE.CAPTURE);
+      setDemoAwaitingConfirmation(false);
+    } else if (previousModeRef.current === MODES.DEMO) {
       ua.endDemo().catch(() => {});
+      setDemoStage(DEMO_STAGE.CAPTURE);
+      setDemoAwaitingConfirmation(false);
     }
+    previousModeRef.current = mode;
   }, [mode, appendStatus, ua]);
+
+  const finalizeDemoCapture = useCallback(async () => {
+    if (!ua || demoReviewBusy) return;
+    setDemoReviewBusy(true);
+    try {
+      if (isDemoRecording) {
+        appendStatus('status', 'End Demo requested: stopping recording first.');
+        toggleDemoRecording();
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      }
+
+      const result = await ua.finalizeDemo();
+      if (result.response) appendStatus('agent', result.response);
+      setDemoAwaitingConfirmation(Boolean(result.awaitingConfirmation));
+      setDemoStage(DEMO_STAGE.REVIEW);
+      if (result.skillWritten) await refreshSkills();
+      if (result.ttsAudioBase64) {
+        await playAudioFromBase64(result.ttsAudioBase64, result.ttsMimeType || 'audio/mpeg');
+      }
+    } catch (error) {
+      appendStatus('error', `Demo finalize failed: ${error.message}`);
+    } finally {
+      setDemoReviewBusy(false);
+    }
+  }, [appendStatus, demoReviewBusy, isDemoRecording, refreshSkills, toggleDemoRecording, ua]);
+
+  const createSkillFromReview = useCallback(async () => {
+    if (!ua || demoReviewBusy) return;
+    setDemoReviewBusy(true);
+    try {
+      const result = await ua.saveDemoSkill();
+      if (result.response) appendStatus('agent', result.response);
+      setDemoAwaitingConfirmation(Boolean(result.awaitingConfirmation));
+      if (result.skillWritten) {
+        await refreshSkills();
+        setDemoStage(DEMO_STAGE.CAPTURE);
+      }
+      if (result.ttsAudioBase64) {
+        await playAudioFromBase64(result.ttsAudioBase64, result.ttsMimeType || 'audio/mpeg');
+      }
+    } catch (error) {
+      appendStatus('error', `Create skill failed: ${error.message}`);
+    } finally {
+      setDemoReviewBusy(false);
+    }
+  }, [appendStatus, demoReviewBusy, refreshSkills, ua]);
 
   const modeIndicator = useMemo(
     () =>
       mode === MODES.DEMO
-        ? isDemoRecording
-          ? 'Demo Mode: recording continuously with VAD segmenting'
-          : 'Demo Mode: click to start narration'
+        ? demoStage === DEMO_STAGE.CAPTURE
+          ? isDemoRecording
+            ? 'Demo Mode: recording continuously with VAD segmenting'
+            : 'Demo Mode: click to start narration'
+          : demoAwaitingConfirmation
+            ? 'Demo Review: ready to create skill or apply corrections'
+            : 'Demo Review: answer clarifying questions'
         : cuaRunning
           ? 'Work Mode: task running (say stop/pause to interrupt)'
           : 'Work Mode: hold to speak command',
-    [mode, cuaRunning, isDemoRecording]
+    [mode, demoStage, demoAwaitingConfirmation, cuaRunning, isDemoRecording]
   );
 
   return (
@@ -182,29 +282,120 @@ export default function App() {
       </header>
 
       {mode === MODES.DEMO ? (
-        <button
-          type="button"
-          disabled={processing}
-          onClick={toggleDemoRecording}
-          className={`w-full rounded-xl px-4 py-5 text-lg font-semibold transition ${
-            isDemoRecording ? 'bg-danger text-white shadow-[0_0_25px_rgba(239,68,68,0.6)]' : 'bg-mint text-slate-950 hover:bg-emerald-400'
-          } ${processing ? 'cursor-not-allowed opacity-70' : ''}`}
-        >
-          {isDemoRecording ? 'Stop Narrating' : 'Start Narrating'}
-        </button>
+        <div className="flex flex-col gap-2">
+          {demoStage === DEMO_STAGE.CAPTURE ? (
+            <>
+              <button
+                type="button"
+                disabled={processing || demoReviewBusy}
+                onClick={() => {
+                  appendStatus(
+                    'status',
+                    isDemoRecording
+                      ? 'Demo narrate button clicked: stopping recording.'
+                      : 'Demo narrate button clicked: starting recording.'
+                  );
+                  toggleDemoRecording();
+                }}
+                className={`w-full rounded-xl px-4 py-5 text-lg font-semibold transition ${
+                  isDemoRecording
+                    ? 'bg-danger text-white shadow-[0_0_25px_rgba(239,68,68,0.6)]'
+                    : 'bg-mint text-slate-950 hover:bg-emerald-400'
+                } ${processing || demoReviewBusy ? 'cursor-not-allowed opacity-70' : ''}`}
+              >
+                {isDemoRecording ? 'Stop Narrating' : 'Start Narrating'}
+              </button>
+              <button
+                type="button"
+                disabled={processing || demoReviewBusy}
+                onClick={finalizeDemoCapture}
+                className={`w-full rounded-xl border border-slate-600 bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:bg-slate-700 ${
+                  processing || demoReviewBusy ? 'cursor-not-allowed opacity-70' : ''
+                }`}
+              >
+                End Demo
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={processing || demoReviewBusy}
+                onMouseDown={startDemoReply}
+                onMouseUp={stopDemoReply}
+                onMouseLeave={isDemoReplyListening ? stopDemoReply : undefined}
+                onTouchStart={(event) => {
+                  event.preventDefault();
+                  startDemoReply();
+                }}
+                onTouchEnd={(event) => {
+                  event.preventDefault();
+                  stopDemoReply();
+                }}
+                className={`w-full rounded-xl px-4 py-5 text-lg font-semibold transition ${
+                  isDemoReplyListening
+                    ? 'bg-danger text-white shadow-[0_0_25px_rgba(239,68,68,0.6)]'
+                    : 'bg-mint text-slate-950 hover:bg-emerald-400'
+                } ${processing || demoReviewBusy ? 'cursor-not-allowed opacity-70' : ''}`}
+              >
+                {isDemoReplyListening ? 'Listening...' : 'Hold to Reply'}
+              </button>
+              <button
+                type="button"
+                disabled={processing || demoReviewBusy || !demoAwaitingConfirmation}
+                onClick={createSkillFromReview}
+                className={`w-full rounded-xl border border-emerald-500 bg-emerald-900/30 px-4 py-3 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-900/50 ${
+                  processing || demoReviewBusy || !demoAwaitingConfirmation
+                    ? 'cursor-not-allowed opacity-70'
+                    : ''
+                }`}
+              >
+                Create Skill
+              </button>
+              <button
+                type="button"
+                disabled={processing || demoReviewBusy}
+                onClick={() => {
+                  setDemoStage(DEMO_STAGE.CAPTURE);
+                  appendStatus('status', 'Returned to demo capture mode.');
+                }}
+                className={`w-full rounded-xl border border-slate-600 bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:bg-slate-700 ${
+                  processing || demoReviewBusy ? 'cursor-not-allowed opacity-70' : ''
+                }`}
+              >
+                Resume Capture
+              </button>
+            </>
+          )}
+        </div>
       ) : (
         <button
           type="button"
           disabled={processing}
-          onMouseDown={startListening}
-          onMouseUp={stopListening}
-          onMouseLeave={isListening ? stopListening : undefined}
+          onMouseDown={() => {
+            appendStatus('status', 'Work speak button pressed: recording started.');
+            startListening();
+          }}
+          onMouseUp={() => {
+            appendStatus('status', 'Work speak button released: recording stopped.');
+            stopListening();
+          }}
+          onMouseLeave={
+            isListening
+              ? () => {
+                  appendStatus('status', 'Work speak button mouse left: recording stopped.');
+                  stopListening();
+                }
+              : undefined
+          }
           onTouchStart={(event) => {
             event.preventDefault();
+            appendStatus('status', 'Work speak button touched: recording started.');
             startListening();
           }}
           onTouchEnd={(event) => {
             event.preventDefault();
+            appendStatus('status', 'Work speak touch ended: recording stopped.');
             stopListening();
           }}
           className={`w-full rounded-xl px-4 py-5 text-lg font-semibold transition ${

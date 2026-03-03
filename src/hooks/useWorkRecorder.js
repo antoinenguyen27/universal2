@@ -1,19 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { toTranscriptionPayload } from '../utils/audioPayload.js';
 
 const STOP_WORDS = ['stop', 'pause', 'wait', 'actually', 'no'];
 
-function blobToBase64(blob) {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const dataUrl = String(reader.result || '');
-      resolve(dataUrl.includes(',') ? dataUrl.split(',')[1] : '');
-    };
-    reader.readAsDataURL(blob);
-  });
-}
-
-export function useWorkRecorder({ onRecording, enableStopWordDetection, onInterrupt }) {
+export function useWorkRecorder({ onRecording, enableStopWordDetection, onInterrupt, onLog }) {
   const [isListening, setIsListening] = useState(false);
   const mediaRecorderRef = useRef(null);
   const streamRef = useRef(null);
@@ -39,8 +29,18 @@ export function useWorkRecorder({ onRecording, enableStopWordDetection, onInterr
       const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
       chunksRef.current = [];
 
-      const base64 = await blobToBase64(blob);
-      if (base64) await onRecording(base64);
+      const payload = await toTranscriptionPayload(blob);
+      if (payload.audioBase64) {
+        onLog?.(
+          payload.convertedToWav
+            ? `Work segment converted to wav and sent (${blob.size} bytes source).`
+            : `Work segment sent as original webm (${blob.size} bytes source).`,
+          payload.convertedToWav ? 'status' : 'warning'
+        );
+        await onRecording(payload.audioBase64, payload.audioFormat);
+      } else {
+        onLog?.('Work segment conversion failed: base64 payload empty.', 'error');
+      }
 
       streamRef.current = null;
       mediaRecorderRef.current = null;
@@ -49,7 +49,7 @@ export function useWorkRecorder({ onRecording, enableStopWordDetection, onInterr
 
     recorder.start();
     setIsListening(true);
-  }, [isListening, onRecording]);
+  }, [isListening, onLog, onRecording]);
 
   const stopListening = useCallback(() => {
     if (mediaRecorderRef.current?.state === 'recording') {

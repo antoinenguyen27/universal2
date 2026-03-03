@@ -30,6 +30,7 @@ function isIrreversible(text = '') {
 }
 
 async function conversationalize({ userVoice, cuaReport }) {
+  pushStatus(`OpenRouter request started for conversational response (model=${process.env.ORCHESTRATOR_MODEL || 'inception/mercury'}).`, 'api');
   const completion = await openrouter.chat.completions.create({
     model: process.env.ORCHESTRATOR_MODEL || 'inception/mercury',
     temperature: 0.2,
@@ -42,6 +43,7 @@ async function conversationalize({ userVoice, cuaReport }) {
     ]
   });
 
+  pushStatus('OpenRouter conversational response received.', 'api');
   return completion.choices[0]?.message?.content?.trim() || cuaReport.summary;
 }
 
@@ -67,9 +69,11 @@ export async function runOrchestratorTurn(userVoice) {
   const page = await getPage();
   const url = page.url() || 'https://example.com';
   const domain = new URL(url).hostname;
+  pushStatus(`Loading skills for domain=${domain}.`, 'status');
   const skills = await loadSkillsForSite(domain);
   const memory = getSessionMemory();
 
+  pushStatus(`OpenRouter request started for orchestrator decision (model=${process.env.ORCHESTRATOR_MODEL || 'inception/mercury'}).`, 'api');
   const completion = await openrouter.chat.completions.create({
     model: process.env.ORCHESTRATOR_MODEL || 'inception/mercury',
     temperature: 0.1,
@@ -87,6 +91,7 @@ export async function runOrchestratorTurn(userVoice) {
   } catch {
     decision = { action: 'respond', response: "I couldn't parse that request. Please say it again." };
   }
+  pushStatus(`Orchestrator decision parsed (action=${decision.action || 'unknown'}).`, 'status');
 
   if (decision.action === 'clarify') {
     return { response: decision.clarificationQuestion || 'Can you clarify what you want me to do?' };
@@ -110,7 +115,7 @@ export async function runOrchestratorTurn(userVoice) {
   }
 
   if (decision.action === 'execute') {
-    pushStatus(`Working: ${decision.taskDescription || decision.cuaInstruction}`);
+    pushStatus(`Working: ${decision.taskDescription || decision.cuaInstruction}`, 'status');
     const cuaResult = await executeCUAInstruction(decision);
     const response = await conversationalize({ userVoice, cuaReport: cuaResult });
     addToMemory({ task: userVoice, result: response, timestamp: Date.now() });

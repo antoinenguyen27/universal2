@@ -8,9 +8,10 @@ export function registerMainWindow(windowRef) {
   mainWindow = windowRef;
 }
 
-export function pushStatus(message) {
+export function pushStatus(message, type = 'status') {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send(IPC_CHANNELS.STATUS_UPDATE, {
+    type,
     message,
     timestamp: Date.now()
   });
