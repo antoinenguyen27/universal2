@@ -7,7 +7,7 @@ import { registerMainWindow, pushStatus } from './status-bus.js';
 import { closeStagehand, getPage } from './stagehand-manager.js';
 import { transcribeAudio } from '../voice/transcription.js';
 import { speak } from '../voice/tts.js';
-import { runOrchestratorTurn, interruptCurrentTask } from '../agent/orchestrator.js';
+import { runOrchestratorTurn, interruptCurrentTask, resetOrchestratorState } from '../agent/orchestrator.js';
 import {
   startDemoSession,
   endDemoSession,
@@ -23,7 +23,7 @@ const { IPC_CHANNELS } = ipcChannelsModule;
 
 let mainWindow = null;
 const runtimeSettings = {
-  cuaModel: process.env.CUA_MODEL || 'anthropic/claude-sonnet-4-20250514',
+  cuaModel: process.env.CUA_MODEL || 'google/gemini-2.5-flash',
   orchestratorModel: process.env.ORCHESTRATOR_MODEL || 'google/gemini-3-flash-preview',
   demoModel: process.env.DEMO_MODEL || 'google/gemini-2.5-flash'
 };
@@ -263,6 +263,7 @@ ipcMain.handle(IPC_CHANNELS.WORK_STOP, async () => {
   pushStatus('Work stop requested from renderer.', 'status');
   await interruptCurrentTask();
   clearSessionMemory();
+  resetOrchestratorState();
   return { ok: true };
 });
 

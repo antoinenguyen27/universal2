@@ -11,7 +11,7 @@ function Indicator({ label, active }) {
 
 export default function SettingsPanel({ settings, onChangeModel }) {
   const cuaChoices = [
-    'anthropic/claude-sonnet-4-20250514',
+    'google/gemini-2.5-flash',
     'google/gemini-2.5-computer-use-preview-10-2025',
     'google/gemini-3-flash-preview'
   ];
@@ -27,7 +27,7 @@ export default function SettingsPanel({ settings, onChangeModel }) {
       <div className="mt-2 text-xs text-slate-400">
         <label className="mb-1 block">CUA model</label>
         <select
-          value={settings.cuaModel || 'anthropic/claude-sonnet-4-20250514'}
+          value={settings.cuaModel || 'google/gemini-2.5-flash'}
           onChange={(event) => onChangeModel?.({ cuaModel: event.target.value })}
           className="w-full rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-100"
         >

@@ -14,27 +14,37 @@
 3. Work push-to-talk
 - Switch to Work mode.
 - Hold the mic button, speak one command, release.
-- Verify one transcript + one orchestrator response.
+- Verify one transcript + one LangGraph response.
 
-4. Stop-word interrupt
+4. Multi-step work tool reasoning
+- In Work mode, request a task requiring context + action (example: inspect page controls then perform an edit).
+- Verify status stream shows multi-step execution (plan/tool loop) before final response.
+
+5. Confirmation gate for irreversible actions
+- Request a send/delete/publish/payment style action.
+- Verify the agent asks for explicit yes/no before execution.
+- Say "no" and verify cancellation.
+
+6. Stop-word interrupt
 - Run a long CUA task in Work mode.
 - Say "stop" or "pause" while CUA is running.
 - Verify interrupt status appears and task pauses.
 
-5. Transcription via Voxtral/OpenRouter
-- Ensure only `OPENROUTER_API_KEY` is configured.
-- Speak a command and verify transcription quality and latency.
+7. Graph checkpoint continuity (same app run)
+- Execute a first task that creates useful context.
+- Issue a follow-up request that depends on prior context.
+- Verify the second turn uses prior context without re-explaining everything.
 
-6. Stagehand Chrome spawn
-- Start app.
-- Confirm visible Chrome window opens automatically.
-- If not found, verify clear status error listing searched paths.
-
-7. Demo mode skill writing
+8. Demo mode skill writing
 - Stay in Demo mode, narrate a short workflow.
-- Confirm agent asks for skill confirmation.
-- Say "yes" and verify file in `skills/data/<domain>/<slug>.md`.
+- Click End Demo & Review.
+- Verify agent produces finalize/correction response, then save.
+- Verify file in `skills/data/<domain>/<slug>.md`.
 
-8. CUA execution via OpenRouter
+9. Tool failure recovery
+- Trigger a blocked state (e.g., login wall).
+- Verify agent reports blocker and concrete next action.
+
+10. CUA execution via OpenRouter
 - In Work mode, issue a reversible browser task.
 - Verify status stream and successful completion using selected CUA model.

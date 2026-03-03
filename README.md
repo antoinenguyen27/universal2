@@ -6,20 +6,36 @@ Universal Agent is an open-source Electron desktop app that runs a voice-first b
 - Control window (Electron renderer): mode toggle, demo narration toggle, work push-to-talk, transcript/status feed, settings, skill log.
 - Agent window (Stagehand Chrome): visible browser controlled by Stagehand `observe()`, `act()`, and `agent({ mode: 'hybrid' })`.
 
-Heavy work runs in Electron main process only: Stagehand, LLM calls, transcription, TTS, and skill file I/O.
+Heavy work runs in Electron main process only: Stagehand, LLM calls, transcription, TTS, LangGraph orchestration, and skill file I/O.
+
+## LangGraph Runtime
+Work and Demo modes are orchestrated with LangGraph state graphs and in-memory checkpoints (per app run).
+
+### Work graph
+- Nodes: `ingest_user_turn` -> `agent_plan` -> (`tool_exec` loop | `safety_gate` | `respond`)
+- Tool loop uses explicit tools:
+  - `read_skills`
+  - `observe_page`
+  - `read_session_memory`
+  - `navigate`
+  - `cua_execute`
+- Irreversible actions are gated through `safety_gate` and require explicit confirmation.
+- Tool failures are retried once for transient errors and surfaced as blockers when exhausted.
+
+### Demo graph
+- Nodes: `ingest_demo_event` -> `context_collect` -> `demo_synthesis_agent` -> `demo_confirmation_gate` -> (`save_skill` | `demo_response`)
+- Keeps multi-turn draft state and confirmation state in LangGraph checkpoint state.
+- Uses shared `observe_page` and existing skill-writing path for save.
 
 ## How It Works
 - Demo mode:
   - Toggle-on recording with VAD auto-segmentation at natural pauses.
-  - Zero-cost page signals (mutating requests, frame navigation, DOM mutation observer bridge).
-  - Debounced `observe()` calls (~600ms settle).
-  - Gemini 2.5 Flash (via OpenRouter) drafts/refines skill markdown.
+  - LangGraph tracks narration + observed UI context to iteratively draft/refine skill markdown.
   - Confirmation loop writes to `skills/data/<domain>/<slug>.md`.
 - Work mode:
   - Push-to-talk command capture.
-  - Mercury (via OpenRouter) orchestrates decisions.
-  - Domain skills + in-process memory (max 20 entries).
-  - Stagehand CUA execution routes through OpenRouter with CUA-capable model.
+  - LangGraph planning loop reasons across multiple tool steps.
+  - Domain skills + session memory + page observation + CUA execution are all tool-mediated.
   - Stop-word interjection runs while CUA is active.
 
 ## Getting Started
@@ -58,7 +74,9 @@ By default, the agent-owned Chrome launches to `https://www.google.com`. You can
   - Check settings panel OpenRouter indicator and `.env`.
 
 ## Dependencies
-- `openai` package is used as a generic OpenAI-compatible client for OpenRouter endpoints.
+- `openai` package is used as a generic OpenAI-compatible client for OpenRouter endpoints in legacy modules.
+- `@langchain/langgraph` powers graph orchestration + in-memory checkpoints.
+- `@langchain/openai` powers OpenRouter-backed chat models inside graphs.
 - `@ai-sdk/openai` remains required by Stagehand client wiring in `electron/stagehand-manager.js`.
 
 ## Licensing
