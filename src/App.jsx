@@ -62,15 +62,18 @@ export default function App() {
   const [deletingSkillId, setDeletingSkillId] = useState('');
   const [processing, setProcessing] = useState(false);
   const [executionRunning, setExecutionRunning] = useState(false);
+  const [pendingAgentOps, setPendingAgentOps] = useState(0);
   const [demoStage, setDemoStage] = useState(DEMO_STAGE.CAPTURE);
   const [demoAwaitingConfirmation, setDemoAwaitingConfirmation] = useState(false);
   const [demoReviewBusy, setDemoReviewBusy] = useState(false);
   const [demoCanFinalize, setDemoCanFinalize] = useState(false);
+  const [demoSessionActive, setDemoSessionActive] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [chatComposerOpen, setChatComposerOpen] = useState(false);
   const previousModeRef = useRef(null);
   const isDemoRecordingRef = useRef(false);
   const stopDemoAndFlushRef = useRef(async () => {});
+  const demoSessionActiveRef = useRef(false);
 
   const appendStatus = useCallback((type, message) => {
     setStatusItems((prev) => [...prev.slice(-59), toFeedItem(type, message)]);
@@ -93,33 +96,38 @@ export default function App() {
   const processSegment = useCallback(
     async (audioBase64, segmentMode, audioFormat = 'webm', demoStageContext = null) => {
       if (!ua) throw new Error('Electron bridge unavailable (window.ua missing).');
+      setPendingAgentOps((value) => value + 1);
       appendStatus(
         'status',
         `Sending audio segment for processing (mode=${segmentMode}, format=${audioFormat}${demoStageContext ? `, stage=${demoStageContext}` : ''}).`
       );
-      const result = await ua.processVoice(audioBase64, segmentMode, audioFormat, demoStageContext);
-      appendStatus(
-        result.error ? 'error' : 'status',
-        result.error
-          ? `Voice processing returned an error (mode=${segmentMode}).`
-          : `Voice processing completed (mode=${segmentMode}).`
-      );
-      if (result.transcript) appendStatus('transcript', result.transcript);
-      if (result.response) appendStatus('agent', result.response);
-      if (segmentMode === MODES.DEMO && typeof result.awaitingConfirmation === 'boolean') {
-        setDemoAwaitingConfirmation(result.awaitingConfirmation);
-      }
-      if (result.skillWritten) {
-        await refreshSkills();
-        if (segmentMode === MODES.DEMO) {
-          setDemoStage(DEMO_STAGE.CAPTURE);
-          setDemoAwaitingConfirmation(false);
+      try {
+        const result = await ua.processVoice(audioBase64, segmentMode, audioFormat, demoStageContext);
+        appendStatus(
+          result.error ? 'error' : 'status',
+          result.error
+            ? `Voice processing returned an error (mode=${segmentMode}).`
+            : `Voice processing completed (mode=${segmentMode}).`
+        );
+        if (result.transcript) appendStatus('transcript', result.transcript);
+        if (result.response) appendStatus('agent', result.response);
+        if (segmentMode === MODES.DEMO && typeof result.awaitingConfirmation === 'boolean') {
+          setDemoAwaitingConfirmation(result.awaitingConfirmation);
         }
+        if (result.skillWritten) {
+          await refreshSkills();
+          if (segmentMode === MODES.DEMO) {
+            setDemoStage(DEMO_STAGE.CAPTURE);
+            setDemoAwaitingConfirmation(false);
+          }
+        }
+        if (result.ttsAudioBase64) {
+          await playAudioFromBase64(result.ttsAudioBase64, result.ttsMimeType || 'audio/mpeg');
+        }
+        return result;
+      } finally {
+        setPendingAgentOps((value) => Math.max(0, value - 1));
       }
-      if (result.ttsAudioBase64) {
-        await playAudioFromBase64(result.ttsAudioBase64, result.ttsMimeType || 'audio/mpeg');
-      }
-      return result;
     },
     [appendStatus, refreshSkills, ua]
   );
@@ -133,17 +141,22 @@ export default function App() {
       const trimmed = text.trim();
       if (!trimmed) return null;
 
+      setPendingAgentOps((value) => value + 1);
       appendStatus('status', 'Sending text command for processing (mode=work).');
-      const result = await ua.processText(trimmed, MODES.WORK);
-      appendStatus(
-        result.error ? 'error' : 'status',
-        result.error ? 'Text processing returned an error (mode=work).' : 'Text processing completed (mode=work).'
-      );
-      if (result.response) appendStatus('agent', result.response);
-      if (result.ttsAudioBase64) {
-        await playAudioFromBase64(result.ttsAudioBase64, result.ttsMimeType || 'audio/mpeg');
+      try {
+        const result = await ua.processText(trimmed, MODES.WORK);
+        appendStatus(
+          result.error ? 'error' : 'status',
+          result.error ? 'Text processing returned an error (mode=work).' : 'Text processing completed (mode=work).'
+        );
+        if (result.response) appendStatus('agent', result.response);
+        if (result.ttsAudioBase64) {
+          await playAudioFromBase64(result.ttsAudioBase64, result.ttsMimeType || 'audio/mpeg');
+        }
+        return result;
+      } finally {
+        setPendingAgentOps((value) => Math.max(0, value - 1));
       }
-      return result;
     },
     [appendStatus, mode, ua]
   );
@@ -167,6 +180,10 @@ export default function App() {
   useEffect(() => {
     stopDemoAndFlushRef.current = stopDemoAndFlush;
   }, [stopDemoAndFlush]);
+
+  useEffect(() => {
+    demoSessionActiveRef.current = demoSessionActive;
+  }, [demoSessionActive]);
 
   const { isListening: isDemoReplyListening, startListening: startDemoReply, stopListening: stopDemoReply } =
     useWorkRecorder({
@@ -239,18 +256,16 @@ export default function App() {
         setDemoStage(DEMO_STAGE.CAPTURE);
         setDemoAwaitingConfirmation(false);
         setDemoCanFinalize(false);
-        try {
-          await ua.startDemo();
-        } catch (error) {
-          if (!cancelled) appendStatus('error', error.message);
-        }
+        setDemoSessionActive(false);
       } else if (previousModeRef.current === MODES.DEMO) {
         try {
           if (isDemoRecordingRef.current) {
             appendStatus('status', 'Switching out of demo: stopping recording and flushing final segment.');
             await stopDemoAndFlushRef.current();
           }
-          await ua.endDemo();
+          if (demoSessionActiveRef.current) {
+            await ua.endDemo();
+          }
         } catch (error) {
           if (!cancelled) appendStatus('error', `Failed to end demo mode cleanly: ${error.message}`);
         }
@@ -258,6 +273,7 @@ export default function App() {
           setDemoStage(DEMO_STAGE.CAPTURE);
           setDemoAwaitingConfirmation(false);
           setDemoCanFinalize(false);
+          setDemoSessionActive(false);
         }
       }
     };
@@ -372,6 +388,16 @@ export default function App() {
     }
   }, [appendStatus, chatInput, processText]);
 
+  const hasSettingsChanges = useMemo(() => {
+    const keyFieldsTouched =
+      Boolean(settingsTouched.openrouterKey) ||
+      Boolean(settingsTouched.googleKey) ||
+      Boolean(settingsTouched.elevenlabsKey) ||
+      Boolean(settingsTouched.elevenlabsVoiceId);
+    const debugChanged = Boolean(settingsDraft.debugMode) !== Boolean(settings.debugMode);
+    return keyFieldsTouched || debugChanged;
+  }, [settings.debugMode, settingsDraft.debugMode, settingsTouched]);
+
   const modeIndicator = useMemo(
     () =>
       mode === MODES.DEMO
@@ -391,6 +417,7 @@ export default function App() {
   const debugMode = Boolean(settings.debugMode);
   const chatFeed = statusItems.filter((item) => item.type === 'agent');
   const showComposer = debugMode || chatComposerOpen;
+  const agentBusy = processing || demoReviewBusy || executionRunning || pendingAgentOps > 0;
 
   return (
     <main className="app-shell">
@@ -424,7 +451,7 @@ export default function App() {
             <button type="button" className="icon-btn" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path
-                  d="M12 8.75A3.25 3.25 0 1 0 12 15.25 3.25 3.25 0 0 0 12 8.75zm9 3.25-.87-.5.08-1a1.1 1.1 0 0 0-.79-1.1l-1-.27-.4-.94a1.1 1.1 0 0 0-1.02-.66h-1.01l-.66-.8a1.1 1.1 0 0 0-1.24-.34l-.97.35-.97-.35a1.1 1.1 0 0 0-1.24.34l-.66.8H7a1.1 1.1 0 0 0-1.02.66l-.4.94-1 .27a1.1 1.1 0 0 0-.79 1.1l.08 1-.87.5a1.1 1.1 0 0 0-.43 1.46l.5.87-.5.87a1.1 1.1 0 0 0 .43 1.46l.87.5-.08 1a1.1 1.1 0 0 0 .79 1.1l1 .27.4.94A1.1 1.1 0 0 0 7 20.5h1.01l.66.8a1.1 1.1 0 0 0 1.24.34l.97-.35.97.35a1.1 1.1 0 0 0 1.24-.34l.66-.8H17a1.1 1.1 0 0 0 1.02-.66l.4-.94 1-.27a1.1 1.1 0 0 0 .79-1.1l-.08-1 .87-.5a1.1 1.1 0 0 0 .43-1.46l-.5-.87.5-.87A1.1 1.1 0 0 0 21 12z"
+                  d="M11.983 3.5c.286 0 .567.048.834.142l.396 1.19a7.232 7.232 0 0 1 1.392.58l1.16-.57a1 1 0 0 1 1.152.199l1.886 1.886a1 1 0 0 1 .198 1.151l-.57 1.161c.229.437.421.901.575 1.388l1.193.398a1 1 0 0 1 .68.95v2.668a1 1 0 0 1-.68.949l-1.193.398a7.263 7.263 0 0 1-.575 1.388l.57 1.162a1 1 0 0 1-.198 1.15l-1.886 1.886a1 1 0 0 1-1.151.199l-1.161-.57a7.247 7.247 0 0 1-1.392.58l-.396 1.19a1 1 0 0 1-.949.68H10.65a1 1 0 0 1-.949-.68l-.396-1.19a7.247 7.247 0 0 1-1.392-.58l-1.161.57a1 1 0 0 1-1.151-.199l-1.886-1.886a1 1 0 0 1-.198-1.15l.57-1.162a7.258 7.258 0 0 1-.575-1.388l-1.193-.398a1 1 0 0 1-.68-.95v-2.667a1 1 0 0 1 .68-.95l1.193-.398c.154-.487.346-.951.575-1.388l-.57-1.161a1 1 0 0 1 .198-1.151l1.886-1.886a1 1 0 0 1 1.151-.198l1.161.57c.435-.23.901-.425 1.392-.58l.396-1.191a1 1 0 0 1 .949-.68h1.334ZM12 8.25A3.75 3.75 0 1 0 12 15.75 3.75 3.75 0 0 0 12 8.25Z"
                   fill="currentColor"
                 />
               </svg>
@@ -440,13 +467,25 @@ export default function App() {
                   <button
                     type="button"
                     disabled={processing || demoReviewBusy}
-                    onClick={() => {
+                    onClick={async () => {
                       appendStatus(
                         'status',
                         isDemoRecording
                           ? 'Demo narrate button clicked: stopping recording.'
                           : 'Demo narrate button clicked: starting recording.'
                       );
+                      if (!isDemoRecording && !demoSessionActive) {
+                        try {
+                          setProcessing(true);
+                          await ua.startDemo();
+                          setDemoSessionActive(true);
+                        } catch (error) {
+                          appendStatus('error', error.message);
+                          return;
+                        } finally {
+                          setProcessing(false);
+                        }
+                      }
                       if (isDemoRecording) {
                         setDemoCanFinalize(true);
                       } else {
@@ -573,6 +612,16 @@ export default function App() {
                 <p>{item.message}</p>
               </article>
             ))}
+            {agentBusy ? (
+              <article className="chat-bubble typing-bubble" aria-live="polite">
+                <p>{executionRunning ? 'Agent is using the browser' : 'Agent is working'}</p>
+                <div className="typing-dots" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              </article>
+            ) : null}
           </div>
           {showComposer ? (
             <div className="chat-composer" onClick={(event) => event.stopPropagation()}>
@@ -629,6 +678,7 @@ export default function App() {
         onSave={saveSettings}
         saving={settingsSaving}
         saveError={settingsError}
+        hasChanges={hasSettingsChanges}
         onDeleteSkill={deleteSkillFromSettings}
         deletingSkillId={deletingSkillId}
       />

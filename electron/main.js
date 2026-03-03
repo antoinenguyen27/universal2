@@ -37,8 +37,8 @@ if (!gotSingleInstanceLock) {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 440,
-    height: 760,
+    width: 340,
+    height: 544,
     minWidth: 340,
     minHeight: 544,
     show: false,

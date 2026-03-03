@@ -8,6 +8,7 @@ export default function SettingsPanel({
   onSave,
   saving,
   saveError,
+  hasChanges,
   onDeleteSkill,
   deletingSkillId
 }) {
@@ -98,15 +99,22 @@ export default function SettingsPanel({
           <p>Demo: {settings.demoModel || 'google/gemini-2.5-flash'}</p>
         </div>
 
-        <div className="actions-row">
-          <button type="button" className="glass-btn muted" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="button" className="glass-btn primary" disabled={saving} onClick={onSave}>
-            {saving ? 'Saving...' : 'Save Settings'}
-          </button>
-        </div>
-        {saveError ? <p className="error-line">{saveError}</p> : null}
+        {hasChanges ? (
+          <div className="actions-row">
+            <button type="button" className="glass-btn muted small settings-action-btn" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="glass-btn primary small settings-action-btn"
+              disabled={saving}
+              onClick={onSave}
+            >
+              {saving ? 'Saving...' : 'Save Settings'}
+            </button>
+          </div>
+        ) : null}
+        {saveError && hasChanges ? <p className="error-line">{saveError}</p> : null}
 
         <div className="skills-panel glass-inset">
           <div className="panel-head">
