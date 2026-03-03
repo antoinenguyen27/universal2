@@ -29,7 +29,7 @@ Universal is an Electron desktop app with a voice-first control panel and an age
 ## Required Environment
 - Required:
   - `OPENROUTER_API_KEY`
-  - `GOOGLE_GENERATIVE_AI_API_KEY`
+  - `GOOGLE_GENERATIVE_AI_API_KEY` -> We need this as stagehand is not compatible with openrouter :( (still want to minimise key requirements)
 - Optional:
   - `ELEVENLABS_API_KEY`
   - `ELEVENLABS_VOICE_ID`

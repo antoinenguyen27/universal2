@@ -4,8 +4,8 @@
 - Node.js 20+
 - npm 10+
 - Google Chrome installed locally
-- `OPENROUTER_API_KEY`
-- `GOOGLE_GENERATIVE_AI_API_KEY`
+- `OPENROUTER_API_KEY` -> Transcription + orchestrator
+- `GOOGLE_GENERATIVE_AI_API_KEY` -> Computer use agent
 
 ## Setup
 1. `npm install`

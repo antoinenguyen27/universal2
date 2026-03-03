@@ -366,6 +366,17 @@ button:focus-visible {
   line-height: 1.45;
 }
 
+.chat-bubble-agent {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.chat-bubble-user {
+  margin-left: auto;
+  max-width: 92%;
+  background: rgba(93, 158, 221, 0.28);
+  border-color: rgba(175, 221, 255, 0.45);
+}
+
 .typing-bubble {
   display: flex;
   align-items: center;

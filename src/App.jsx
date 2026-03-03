@@ -26,6 +26,16 @@ function toFeedItem(type, message) {
   return { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, type, message };
 }
 
+function toChatItem(role, message, meta = {}) {
+  return {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    role,
+    message,
+    createdAt: Date.now(),
+    ...meta
+  };
+}
+
 async function playAudioFromBase64(audioBase64, mimeType = 'audio/mpeg') {
   if (!audioBase64) return;
   const binary = window.atob(audioBase64);
@@ -52,6 +62,7 @@ export default function App() {
   const ua = typeof window !== 'undefined' ? window.ua : undefined;
   const [mode, setMode] = useState(MODES.WORK);
   const [statusItems, setStatusItems] = useState([]);
+  const [chatItems, setChatItems] = useState([]);
   const [skills, setSkills] = useState([]);
   const [settings, setSettings] = useState({});
   const [settingsDraft, setSettingsDraft] = useState(INITIAL_SETTINGS_DRAFT);
@@ -77,6 +88,42 @@ export default function App() {
 
   const appendStatus = useCallback((type, message) => {
     setStatusItems((prev) => [...prev.slice(-59), toFeedItem(type, message)]);
+  }, []);
+
+  const appendUserVoiceChat = useCallback((message, modeValue, stageValue = null) => {
+    const trimmed = String(message || '').trim();
+    if (!trimmed) return;
+
+    setChatItems((prev) => {
+      const last = prev[prev.length - 1];
+      const canMerge =
+        Boolean(last) &&
+        last.role === 'user' &&
+        last.inputType === 'voice' &&
+        last.mode === modeValue &&
+        last.stage === stageValue;
+
+      if (canMerge) {
+        const merged = `${last.message} ${trimmed}`.replace(/\s+/g, ' ').trim();
+        return [...prev.slice(0, -1), { ...last, message: merged, updatedAt: Date.now() }].slice(-79);
+      }
+
+      return [...prev, toChatItem('user', trimmed, { inputType: 'voice', mode: modeValue, stage: stageValue })].slice(
+        -79
+      );
+    });
+  }, []);
+
+  const appendUserTextChat = useCallback((message) => {
+    const trimmed = String(message || '').trim();
+    if (!trimmed) return;
+    setChatItems((prev) => [...prev, toChatItem('user', trimmed, { inputType: 'text' })].slice(-79));
+  }, []);
+
+  const appendAgentChat = useCallback((message) => {
+    const trimmed = String(message || '').trim();
+    if (!trimmed) return;
+    setChatItems((prev) => [...prev, toChatItem('agent', trimmed)].slice(-79));
   }, []);
 
   const refreshSkills = useCallback(async () => {
@@ -109,8 +156,14 @@ export default function App() {
             ? `Voice processing returned an error (mode=${segmentMode}).`
             : `Voice processing completed (mode=${segmentMode}).`
         );
-        if (result.transcript) appendStatus('transcript', result.transcript);
-        if (result.response) appendStatus('agent', result.response);
+      if (result.transcript) {
+        appendStatus('transcript', result.transcript);
+        appendUserVoiceChat(result.transcript, segmentMode, demoStageContext);
+      }
+      if (result.response) {
+        appendStatus('agent', result.response);
+        appendAgentChat(result.response);
+      }
         if (segmentMode === MODES.DEMO && typeof result.awaitingConfirmation === 'boolean') {
           setDemoAwaitingConfirmation(result.awaitingConfirmation);
         }
@@ -129,7 +182,7 @@ export default function App() {
         setPendingAgentOps((value) => Math.max(0, value - 1));
       }
     },
-    [appendStatus, refreshSkills, ua]
+    [appendAgentChat, appendStatus, appendUserVoiceChat, refreshSkills, ua]
   );
 
   const processText = useCallback(
@@ -141,6 +194,7 @@ export default function App() {
       const trimmed = text.trim();
       if (!trimmed) return null;
 
+      appendUserTextChat(trimmed);
       setPendingAgentOps((value) => value + 1);
       appendStatus('status', 'Sending text command for processing (mode=work).');
       try {
@@ -149,7 +203,10 @@ export default function App() {
           result.error ? 'error' : 'status',
           result.error ? 'Text processing returned an error (mode=work).' : 'Text processing completed (mode=work).'
         );
-        if (result.response) appendStatus('agent', result.response);
+        if (result.response) {
+          appendStatus('agent', result.response);
+          appendAgentChat(result.response);
+        }
         if (result.ttsAudioBase64) {
           await playAudioFromBase64(result.ttsAudioBase64, result.ttsMimeType || 'audio/mpeg');
         }
@@ -158,7 +215,7 @@ export default function App() {
         setPendingAgentOps((value) => Math.max(0, value - 1));
       }
     },
-    [appendStatus, mode, ua]
+    [appendAgentChat, appendStatus, appendUserTextChat, mode, ua]
   );
 
   const { isRecording: isDemoRecording, toggle: toggleDemoRecording, stopAndFlush: stopDemoAndFlush } =
@@ -295,7 +352,10 @@ export default function App() {
       }
 
       const result = await ua.finalizeDemo();
-      if (result.response) appendStatus('agent', result.response);
+      if (result.response) {
+        appendStatus('agent', result.response);
+        appendAgentChat(result.response);
+      }
       setDemoAwaitingConfirmation(Boolean(result.awaitingConfirmation));
       setDemoStage(DEMO_STAGE.REVIEW);
       setDemoCanFinalize(false);
@@ -308,14 +368,17 @@ export default function App() {
     } finally {
       setDemoReviewBusy(false);
     }
-  }, [appendStatus, demoCanFinalize, demoReviewBusy, isDemoRecording, refreshSkills, stopDemoAndFlush, ua]);
+  }, [appendAgentChat, appendStatus, demoCanFinalize, demoReviewBusy, isDemoRecording, refreshSkills, stopDemoAndFlush, ua]);
 
   const createSkillFromReview = useCallback(async () => {
     if (!ua || demoReviewBusy) return;
     setDemoReviewBusy(true);
     try {
       const result = await ua.saveDemoSkill();
-      if (result.response) appendStatus('agent', result.response);
+      if (result.response) {
+        appendStatus('agent', result.response);
+        appendAgentChat(result.response);
+      }
       setDemoAwaitingConfirmation(Boolean(result.awaitingConfirmation));
       if (result.skillWritten) {
         await refreshSkills();
@@ -330,7 +393,7 @@ export default function App() {
     } finally {
       setDemoReviewBusy(false);
     }
-  }, [appendStatus, demoReviewBusy, refreshSkills, ua]);
+  }, [appendAgentChat, appendStatus, demoReviewBusy, refreshSkills, ua]);
 
   const saveSettings = useCallback(async () => {
     if (!ua) return;
@@ -415,7 +478,7 @@ export default function App() {
   );
 
   const debugMode = Boolean(settings.debugMode);
-  const chatFeed = statusItems.filter((item) => item.type === 'agent');
+  const chatFeed = chatItems;
   const showComposer = debugMode || chatComposerOpen;
   const agentBusy = processing || demoReviewBusy || executionRunning || pendingAgentOps > 0;
 
@@ -623,7 +686,10 @@ export default function App() {
           <div className="chat-log">
             {chatFeed.length === 0 ? <p className="muted-text">Agent responses will appear here.</p> : null}
             {chatFeed.map((item) => (
-              <article key={item.id} className="chat-bubble">
+              <article
+                key={item.id}
+                className={`chat-bubble ${item.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-agent'}`}
+              >
                 <p>{item.message}</p>
               </article>
             ))}
