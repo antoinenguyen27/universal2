@@ -1,0 +1,59 @@
+{
+  "name": "universal-agent",
+  "version": "0.1.0",
+  "description": "Voice-first browser collaborator built with Electron, Stagehand, and React.",
+  "type": "module",
+  "main": "electron/main.js",
+  "author": "",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
+    "build": "vite build",
+    "dist": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^2.0.0",
+    "@browserbasehq/stagehand": "^3.0.0",
+    "dotenv": "^16.4.7",
+    "openai": "^5.20.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.4.21",
+    "concurrently": "^9.2.0",
+    "cross-env": "^7.0.3",
+    "electron": "^35.0.1",
+    "electron-builder": "^26.3.3",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "vite": "^6.2.1",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.yourorg.universal-agent",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "agent/**/*",
+      "voice/**/*",
+      "skills/**/*",
+      "memory/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}
