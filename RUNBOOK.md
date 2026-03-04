@@ -5,7 +5,7 @@
 - npm 10+
 - Google Chrome installed locally
 - `OPENROUTER_API_KEY` -> Transcription + orchestrator
-- `ANTHROPIC_API_KEY` -> Computer-use agent (Stagehand browser execution)
+- `ANTHROPIC_API_KEY` -> Computer-use agent (Stagehand browser execution) Stagehand is not compatible with open router so we need a standalone key.
 - `STAGEHAND_AGENT_MODE` (optional) -> `dom`, `cua`, or `hybrid` (default `cua`)
 
 ## Setup

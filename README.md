@@ -14,6 +14,7 @@ Universal is an Electron desktop app with a voice-first control panel and an age
 - Anthropic:
   - Stagehand browser execution using locked model `anthropic/claude-haiku-4-5-20251001`
   - Agent mode is configurable in Settings (`DOM`, `CUA`, `Hybrid`; default `CUA`)
+  - Stagehand is not compatible with OpenRouter, hence we need the standalone Anthropic key. 
 - ElevenLabs:
   - Optional TTS provider; system speech fallback remains available.
   - If `ELEVENLABS_API_KEY` is set and `ELEVENLABS_VOICE_ID` is empty, TTS uses default voice `EST9Ui6982FZPSi7gCHi`.
