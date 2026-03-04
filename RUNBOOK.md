@@ -6,7 +6,7 @@
 - Google Chrome installed locally
 - `OPENROUTER_API_KEY` -> Transcription + orchestrator
 - `ANTHROPIC_API_KEY` -> Computer-use agent (Stagehand browser execution)
-- `STAGEHAND_AGENT_MODE` (optional) -> `dom`, `cua`, or `hybrid` (default `hybrid`)
+- `STAGEHAND_AGENT_MODE` (optional) -> `dom`, `cua`, or `hybrid` (default `cua`)
 
 ## Setup
 1. `npm install`

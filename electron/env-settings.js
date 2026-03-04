@@ -48,7 +48,7 @@ export function normalizeExecutionMode(value) {
   const normalized = String(value || '')
     .trim()
     .toLowerCase();
-  return EXECUTION_MODES.includes(normalized) ? normalized : 'hybrid';
+  return EXECUTION_MODES.includes(normalized) ? normalized : 'cua';
 }
 
 export function getRuntimeSettings() {

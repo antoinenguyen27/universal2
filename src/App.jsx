@@ -17,7 +17,7 @@ const DEMO_STAGE = {
 const INITIAL_SETTINGS_DRAFT = {
   openrouterKey: '',
   anthropicKey: '',
-  executionMode: 'hybrid',
+  executionMode: 'cua',
   elevenlabsKey: '',
   elevenlabsVoiceId: '',
   debugMode: false
@@ -55,7 +55,7 @@ async function playAudioFromBase64(audioBase64, mimeType = 'audio/mpeg') {
 function settingsToDraft(next = {}) {
   return {
     ...INITIAL_SETTINGS_DRAFT,
-    executionMode: next.executionMode || 'hybrid',
+    executionMode: next.executionMode || 'cua',
     debugMode: Boolean(next.debugMode)
   };
 }
@@ -256,7 +256,7 @@ export default function App() {
       }
     });
 
-  const { isListening, startListening, stopListening } = useWorkRecorder({
+  const { isListening, isStarting: isWorkStarting, startListening, stopListening } = useWorkRecorder({
     enableStopWordDetection: executionRunning,
     onLog: (message, type = 'status') => appendStatus(type, message),
     onInterrupt: async () => {
@@ -404,7 +404,7 @@ export default function App() {
       const payload = { debugMode: settingsDraft.debugMode };
       if (settingsTouched.openrouterKey) payload.openrouterKey = settingsDraft.openrouterKey;
       if (settingsTouched.anthropicKey) payload.anthropicKey = settingsDraft.anthropicKey;
-      if (settingsDraft.executionMode !== (settings.executionMode || 'hybrid')) {
+      if (settingsDraft.executionMode !== (settings.executionMode || 'cua')) {
         payload.executionMode = settingsDraft.executionMode;
       }
       if (settingsTouched.elevenlabsKey) payload.elevenlabsKey = settingsDraft.elevenlabsKey;
@@ -462,7 +462,7 @@ export default function App() {
       Boolean(settingsTouched.elevenlabsKey) ||
       Boolean(settingsTouched.elevenlabsVoiceId);
     const executionModeChanged =
-      String(settingsDraft.executionMode || 'hybrid') !== String(settings.executionMode || 'hybrid');
+      String(settingsDraft.executionMode || 'cua') !== String(settings.executionMode || 'cua');
     const debugChanged = Boolean(settingsDraft.debugMode) !== Boolean(settings.debugMode);
     return keyFieldsTouched || executionModeChanged || debugChanged;
   }, [settings.debugMode, settings.executionMode, settingsDraft.debugMode, settingsDraft.executionMode, settingsTouched]);
@@ -633,16 +633,20 @@ export default function App() {
               <button
                 type="button"
                 disabled={processing}
-                onMouseDown={() => {
+                onMouseDown={async () => {
                   appendStatus('status', 'Work speak button pressed: recording started.');
-                  startListening();
+                  try {
+                    await startListening();
+                  } catch (error) {
+                    appendStatus('error', `Microphone start failed: ${error.message}`);
+                  }
                 }}
                 onMouseUp={() => {
                   appendStatus('status', 'Work speak button released: recording stopped.');
                   stopListening();
                 }}
                 onMouseLeave={
-                  isListening
+                  isListening || isWorkStarting
                     ? () => {
                         stopListening();
                       }
@@ -651,16 +655,20 @@ export default function App() {
                 onTouchStart={(event) => {
                   event.preventDefault();
                   appendStatus('status', 'Work speak button touched: recording started.');
-                  startListening();
+                  startListening().catch((error) => {
+                    appendStatus('error', `Microphone start failed: ${error.message}`);
+                  });
                 }}
                 onTouchEnd={(event) => {
                   event.preventDefault();
                   appendStatus('status', 'Work speak touch ended: recording stopped.');
                   stopListening();
                 }}
-                className={`glass-btn ${isListening ? 'danger' : 'primary'} ${processing ? 'disabled' : ''}`}
+                className={`glass-btn ${isListening ? 'danger' : 'primary'} ${
+                  processing ? 'disabled' : ''
+                }`}
               >
-                {isListening ? 'Listening...' : 'Hold to Speak'}
+                {isWorkStarting ? 'Starting mic...' : isListening ? 'Listening...' : 'Hold to Speak'}
               </button>
               {executionRunning ? (
                 <button
@@ -669,7 +677,12 @@ export default function App() {
                   onClick={async () => {
                     if (!ua) return;
                     appendStatus('interrupt', 'Stop button pressed. Interrupting current execution task.');
-                    await ua.interruptExecution();
+                    try {
+                      const result = await ua.interruptExecution();
+                      if (result?.response) appendStatus('status', result.response);
+                    } catch (error) {
+                      appendStatus('error', `Failed to interrupt task: ${error.message}`);
+                    }
                   }}
                 >
                   Stop Task

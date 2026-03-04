@@ -15,7 +15,7 @@ function normalizeExecutionMode(value) {
   const normalized = String(value || '')
     .trim()
     .toLowerCase();
-  return EXECUTION_MODES.includes(normalized) ? normalized : 'hybrid';
+  return EXECUTION_MODES.includes(normalized) ? normalized : 'cua';
 }
 
 function stringifyForTrace(value) {
@@ -153,9 +153,13 @@ export async function executeBrowserInstruction(decision) {
 export async function pauseExecution() {
   if (!executionRunning || !activeAbortController) return { ok: true, interrupted: false };
 
+  const agentToStop = activeAgent;
   activeAbortController.abort();
+  executionRunning = false;
+  clearNoProgressWatchdog();
+  pushExecutionState(false);
   try {
-    await activeAgent?.stop?.();
+    await agentToStop?.stop?.();
   } catch {
     // Best effort stop; abort signal is still set for interruption flow.
   }

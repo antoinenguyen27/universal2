@@ -1,7 +1,7 @@
 # Agent Runtime Spec (LangGraph)
 
 ## Scope
-This spec defines LangGraph runtime behavior for Work and Demo modes, with browser execution handled by Stagehand agent mode (`dom`, `cua`, or `hybrid`; default `hybrid`).
+This spec defines LangGraph runtime behavior for Work and Demo modes, with browser execution handled by Stagehand agent mode (`dom`, `cua`, or `hybrid`; default `cua`).
 
 ## Provider Contract
 - OpenRouter:

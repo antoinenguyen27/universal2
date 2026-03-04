@@ -13,7 +13,7 @@ Universal is an Electron desktop app with a voice-first control panel and an age
   - LangGraph orchestrator/demo chat model in `/Users/an/Documents/helpinghand/agent/langgraph/model.js`
 - Anthropic:
   - Stagehand browser execution using locked model `anthropic/claude-haiku-4-5-20251001`
-  - Agent mode is configurable in Settings (`DOM`, `CUA`, `Hybrid`; default `Hybrid`)
+  - Agent mode is configurable in Settings (`DOM`, `CUA`, `Hybrid`; default `CUA`)
 - ElevenLabs:
   - Optional TTS provider; system speech fallback remains available.
 
@@ -32,7 +32,7 @@ Universal is an Electron desktop app with a voice-first control panel and an age
   - `OPENROUTER_API_KEY`
   - `ANTHROPIC_API_KEY`
 - Optional:
-  - `STAGEHAND_AGENT_MODE` (`dom` | `cua` | `hybrid`, default `hybrid`)
+  - `STAGEHAND_AGENT_MODE` (`dom` | `cua` | `hybrid`, default `cua`)
   - `ELEVENLABS_API_KEY`
   - `ELEVENLABS_VOICE_ID`
 

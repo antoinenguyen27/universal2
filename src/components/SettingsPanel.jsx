@@ -21,7 +21,7 @@ export default function SettingsPanel({
   const missing = settings?.missingRequiredKeys || [];
   const requiredReady = missing.length === 0;
   const skillList = skills || [];
-  const executionMode = draft.executionMode || 'hybrid';
+  const executionMode = draft.executionMode || 'cua';
   const [editingKeys, setEditingKeys] = useState({});
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const [tooltipPos, setTooltipPos] = useState({ top: 0, left: 0 });
@@ -276,7 +276,7 @@ export default function SettingsPanel({
           </label>
 
           <div className="settings-meta">
-            <p>Mode: {(settings.executionMode || 'hybrid').toUpperCase()}</p>
+            <p>Mode: {(settings.executionMode || 'cua').toUpperCase()}</p>
             <p>Execution: {settings.executionModel || 'anthropic/claude-haiku-4-5-20251001'}</p>
             <p>Orchestrator: {settings.orchestratorModel || 'google/gemini-3-flash-preview'}</p>
             <p>Demo: {settings.demoModel || 'google/gemini-2.5-flash'}</p>
