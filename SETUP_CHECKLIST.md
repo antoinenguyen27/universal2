@@ -1,9 +1,9 @@
 # SETUP_CHECKLIST
 
 1. Startup key validation
-- Unset `GOOGLE_GENERATIVE_AI_API_KEY` and start app.
+- Unset `OPENROUTER_API_KEY` and start app.
 - Verify startup is blocked with explicit status error.
-- Repeat for missing `OPENROUTER_API_KEY`.
+- Repeat for missing `ANTHROPIC_API_KEY`.
 
 2. Work push-to-talk
 - Switch to Work mode.
@@ -13,7 +13,7 @@
 3. Hybrid browser execution
 - Trigger a reversible browser task in Work mode.
 - Verify `browser_execute` runs and reports step/status updates.
-- Confirm model is `google/gemini-3-flash-preview` in status/API trace logs.
+- Confirm model is `anthropic/claude-haiku-4-5-20251001` in status/API trace logs.
 
 4. Interrupt behavior
 - Start a long browser task.

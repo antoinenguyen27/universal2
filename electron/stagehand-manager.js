@@ -5,7 +5,7 @@ import { Stagehand } from '@browserbasehq/stagehand';
 
 let stagehand = null;
 const DEFAULT_START_URL = process.env.START_URL || 'https://www.google.com';
-const EXECUTION_MODEL = 'google/gemini-3-flash-preview';
+const EXECUTION_MODEL = 'anthropic/claude-haiku-4-5-20251001';
 
 export class ChromeNotFoundError extends Error {
   constructor(pathsSearched) {
@@ -60,17 +60,17 @@ export function getChromePath() {
   return found;
 }
 
-function requireGoogleKey() {
-  if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+function requireAnthropicKey() {
+  if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error(
-      'Missing GOOGLE_GENERATIVE_AI_API_KEY. Hybrid execution requires Google Generative AI credentials.'
+      'Missing ANTHROPIC_API_KEY. Hybrid execution requires Anthropic credentials.'
     );
   }
 }
 
 export async function getStagehand() {
   if (stagehand) return stagehand;
-  requireGoogleKey();
+  requireAnthropicKey();
 
   stagehand = new Stagehand({
     env: 'LOCAL',

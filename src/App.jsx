@@ -16,7 +16,7 @@ const DEMO_STAGE = {
 
 const INITIAL_SETTINGS_DRAFT = {
   openrouterKey: '',
-  googleKey: '',
+  anthropicKey: '',
   elevenlabsKey: '',
   elevenlabsVoiceId: '',
   debugMode: false
@@ -402,7 +402,7 @@ export default function App() {
     try {
       const payload = { debugMode: settingsDraft.debugMode };
       if (settingsTouched.openrouterKey) payload.openrouterKey = settingsDraft.openrouterKey;
-      if (settingsTouched.googleKey) payload.googleKey = settingsDraft.googleKey;
+      if (settingsTouched.anthropicKey) payload.anthropicKey = settingsDraft.anthropicKey;
       if (settingsTouched.elevenlabsKey) payload.elevenlabsKey = settingsDraft.elevenlabsKey;
       if (settingsTouched.elevenlabsVoiceId) payload.elevenlabsVoiceId = settingsDraft.elevenlabsVoiceId;
       const result = await ua.setSettings(payload);
@@ -454,7 +454,7 @@ export default function App() {
   const hasSettingsChanges = useMemo(() => {
     const keyFieldsTouched =
       Boolean(settingsTouched.openrouterKey) ||
-      Boolean(settingsTouched.googleKey) ||
+      Boolean(settingsTouched.anthropicKey) ||
       Boolean(settingsTouched.elevenlabsKey) ||
       Boolean(settingsTouched.elevenlabsVoiceId);
     const debugChanged = Boolean(settingsDraft.debugMode) !== Boolean(settings.debugMode);
@@ -752,6 +752,7 @@ export default function App() {
         settings={settings}
         skills={skills.slice().reverse()}
         draft={settingsDraft}
+        touched={settingsTouched}
         onDraftChange={(field, value) => {
           setSettingsDraft((prev) => ({ ...prev, [field]: value }));
           setSettingsTouched((prev) => ({ ...prev, [field]: true }));

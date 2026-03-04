@@ -8,7 +8,7 @@ let activeAgent = null;
 let lastProgressAt = 0;
 let progressTimer = null;
 const EXECUTION_TRACE_MAX_CHARS = Number(process.env.EXECUTION_TRACE_MAX_CHARS || 2500);
-const EXECUTION_MODEL = 'google/gemini-3-flash-preview';
+const EXECUTION_MODEL = 'anthropic/claude-haiku-4-5-20251001';
 
 function stringifyForTrace(value) {
   try {
@@ -47,8 +47,8 @@ function clearNoProgressWatchdog() {
 }
 
 function resolveExecutionConfig(decision) {
-  if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-    throw new Error('Missing GOOGLE_GENERATIVE_AI_API_KEY for hybrid execution.');
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('Missing ANTHROPIC_API_KEY for hybrid execution.');
   }
 
   return {

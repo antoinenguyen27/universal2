@@ -7,7 +7,7 @@ const ENV_PATH = path.join(__dirname, '../.env');
 
 const SUPPORTED_ENV_KEYS = [
   'OPENROUTER_API_KEY',
-  'GOOGLE_GENERATIVE_AI_API_KEY',
+  'ANTHROPIC_API_KEY',
   'ELEVENLABS_API_KEY',
   'ELEVENLABS_VOICE_ID',
   'DEBUG_MODE'
@@ -45,7 +45,7 @@ function quoteEnvValue(value) {
 export function getRuntimeSettings() {
   return {
     openrouterConfigured: Boolean(process.env.OPENROUTER_API_KEY),
-    googleConfigured: Boolean(process.env.GOOGLE_GENERATIVE_AI_API_KEY),
+    anthropicConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
     elevenlabsConfigured: Boolean(process.env.ELEVENLABS_API_KEY),
     elevenlabsVoiceConfigured: Boolean(process.env.ELEVENLABS_VOICE_ID),
     debugMode: readBooleanEnv(process.env.DEBUG_MODE, false)

@@ -7,15 +7,15 @@ This spec defines LangGraph runtime behavior for Work and Demo modes, with brows
 - OpenRouter:
   - Voice transcription (`voxtral-small-24b-2507` path)
   - Work/demo orchestration chat model
-- Google Generative AI:
-  - Stagehand hybrid execution with locked model `google/gemini-3-flash-preview`
+- Anthropic:
+  - Stagehand hybrid execution with locked model `anthropic/claude-haiku-4-5-20251001`
 - ElevenLabs:
   - Optional TTS only
 
 ## Required Environment
-- Required: `OPENROUTER_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`
+- Required: `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`
 - Optional: `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`
-- Startup is blocked when required keys are missing.
+- App startup is allowed when required keys are missing, but Work/Demo runtime actions are blocked until required keys are configured.
 
 ## Work Graph
 

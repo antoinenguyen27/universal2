@@ -21,8 +21,8 @@ import { deleteSkill, loadAllSkills } from '../skills/skill-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { IPC_CHANNELS } = ipcChannelsModule;
-const EXECUTION_MODEL = 'google/gemini-3-flash-preview';
-const REQUIRED_ENV_VARS = ['OPENROUTER_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'];
+const EXECUTION_MODEL = 'anthropic/claude-haiku-4-5-20251001';
+const REQUIRED_ENV_VARS = ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY'];
 
 let mainWindow = null;
 const runtimeSettings = {
@@ -121,11 +121,11 @@ function settingsPayload() {
   const runtime = getRuntimeSettings();
   return {
     openrouterKey: runtime.openrouterConfigured ? 'configured' : '',
-    googleKey: runtime.googleConfigured ? 'configured' : '',
+    anthropicKey: runtime.anthropicConfigured ? 'configured' : '',
     elevenlabsKey: runtime.elevenlabsConfigured ? 'configured' : '',
     elevenlabsVoiceId: runtime.elevenlabsVoiceConfigured ? 'configured' : '',
     openrouterConfigured: runtime.openrouterConfigured,
-    googleConfigured: runtime.googleConfigured,
+    anthropicConfigured: runtime.anthropicConfigured,
     elevenlabsConfigured: runtime.elevenlabsConfigured,
     elevenlabsVoiceConfigured: runtime.elevenlabsVoiceConfigured,
     debugMode: runtime.debugMode,
@@ -364,8 +364,8 @@ ipcMain.handle(IPC_CHANNELS.SETTINGS_SET, async (_event, patch) => {
   if (Object.prototype.hasOwnProperty.call(patch || {}, 'openrouterKey')) {
     envPatch.OPENROUTER_API_KEY = String(patch.openrouterKey ?? '');
   }
-  if (Object.prototype.hasOwnProperty.call(patch || {}, 'googleKey')) {
-    envPatch.GOOGLE_GENERATIVE_AI_API_KEY = String(patch.googleKey ?? '');
+  if (Object.prototype.hasOwnProperty.call(patch || {}, 'anthropicKey')) {
+    envPatch.ANTHROPIC_API_KEY = String(patch.anthropicKey ?? '');
   }
   if (Object.prototype.hasOwnProperty.call(patch || {}, 'elevenlabsKey')) {
     envPatch.ELEVENLABS_API_KEY = String(patch.elevenlabsKey ?? '');

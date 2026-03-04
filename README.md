@@ -11,8 +11,8 @@ Universal is an Electron desktop app with a voice-first control panel and an age
 - OpenRouter:
   - Voxtral transcription in `/Users/an/Documents/helpinghand/voice/transcription.js`
   - LangGraph orchestrator/demo chat model in `/Users/an/Documents/helpinghand/agent/langgraph/model.js`
-- Google Generative AI:
-  - Stagehand browser execution in hybrid mode using locked model `google/gemini-3-flash-preview`
+- Anthropic:
+  - Stagehand browser execution in hybrid mode using locked model `anthropic/claude-haiku-4-5-20251001`
 - ElevenLabs:
   - Optional TTS provider; system speech fallback remains available.
 
@@ -29,12 +29,12 @@ Universal is an Electron desktop app with a voice-first control panel and an age
 ## Required Environment
 - Required:
   - `OPENROUTER_API_KEY`
-  - `GOOGLE_GENERATIVE_AI_API_KEY` -> We need this as stagehand is not compatible with openrouter :( (still want to minimise key requirements)
+  - `ANTHROPIC_API_KEY`
 - Optional:
   - `ELEVENLABS_API_KEY`
   - `ELEVENLABS_VOICE_ID`
 
-Startup is blocked when either required key is missing, and the app emits a startup error status.
+Startup is not blocked when required keys are missing. The app starts and emits a startup warning, while Work/Demo runtime actions remain unavailable until keys are configured (including via Settings).
 
 ## Quick Start
 1. `npm install`
@@ -44,7 +44,7 @@ Startup is blocked when either required key is missing, and the app emits a star
 
 ## Troubleshooting
 - Missing required keys:
-  - Check Settings indicators for OpenRouter and Google GenAI.
+  - Check Settings indicators for OpenRouter and Anthropic.
 - Login/MFA/captcha blocker during execution:
   - Complete auth in Chrome, then retry.
 - Chrome not found:

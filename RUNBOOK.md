@@ -5,7 +5,7 @@
 - npm 10+
 - Google Chrome installed locally
 - `OPENROUTER_API_KEY` -> Transcription + orchestrator
-- `GOOGLE_GENERATIVE_AI_API_KEY` -> Computer use agent
+- `ANTHROPIC_API_KEY` -> Computer-use agent (Stagehand hybrid execution)
 
 ## Setup
 1. `npm install`
