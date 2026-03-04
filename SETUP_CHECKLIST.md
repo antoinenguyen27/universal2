@@ -2,7 +2,7 @@
 
 1. Startup key validation
 - Unset `OPENROUTER_API_KEY` and start app.
-- Verify startup is blocked with explicit status error.
+- Verify startup warning is shown and Work/Demo actions are unavailable until key is configured in Settings.
 - Repeat for missing `ANTHROPIC_API_KEY`.
 
 2. Work push-to-talk
@@ -10,10 +10,11 @@
 - Hold mic, speak one command, release.
 - Verify transcript and orchestrated response.
 
-3. Hybrid browser execution
+3. Browser execution mode
 - Trigger a reversible browser task in Work mode.
 - Verify `browser_execute` runs and reports step/status updates.
 - Confirm model is `anthropic/claude-haiku-4-5-20251001` in status/API trace logs.
+- Confirm mode switches work via Settings (`DOM`, `CUA`, `Hybrid`) and status/API trace logs show selected mode.
 
 4. Interrupt behavior
 - Start a long browser task.

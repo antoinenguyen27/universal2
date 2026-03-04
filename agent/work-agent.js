@@ -9,6 +9,14 @@ let lastProgressAt = 0;
 let progressTimer = null;
 const EXECUTION_TRACE_MAX_CHARS = Number(process.env.EXECUTION_TRACE_MAX_CHARS || 2500);
 const EXECUTION_MODEL = 'anthropic/claude-haiku-4-5-20251001';
+const EXECUTION_MODES = ['dom', 'cua', 'hybrid'];
+
+function normalizeExecutionMode(value) {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase();
+  return EXECUTION_MODES.includes(normalized) ? normalized : 'hybrid';
+}
 
 function stringifyForTrace(value) {
   try {
@@ -48,11 +56,12 @@ function clearNoProgressWatchdog() {
 
 function resolveExecutionConfig(decision) {
   if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('Missing ANTHROPIC_API_KEY for hybrid execution.');
+    throw new Error('Missing ANTHROPIC_API_KEY for browser execution.');
   }
 
   return {
     model: EXECUTION_MODEL,
+    mode: normalizeExecutionMode(process.env.STAGEHAND_AGENT_MODE),
     taskScope: decision.taskScope || 'short'
   };
 }
@@ -69,11 +78,11 @@ export async function executeBrowserInstruction(decision) {
   startNoProgressWatchdog();
 
   pushStatus(`Executing: ${decision.taskDescription}`, 'status');
-  pushStatus(`Hybrid execution ready (model=${execution.model}).`, 'api');
+  pushStatus(`Execution ready (mode=${execution.mode}, model=${execution.model}).`, 'api');
 
   try {
     activeAgent = sh.agent({
-      mode: 'hybrid',
+      mode: execution.mode,
       model: execution.model,
       maxSteps: execution.taskScope === 'long' ? 35 : 15,
       systemPrompt,
@@ -86,6 +95,7 @@ export async function executeBrowserInstruction(decision) {
       }
     });
     pushExecutionTrace('execute.request', {
+      mode: execution.mode,
       model: execution.model,
       taskScope: execution.taskScope,
       instruction: decision.instruction

@@ -1,20 +1,21 @@
 # Agent Runtime Spec (LangGraph)
 
 ## Scope
-This spec defines LangGraph runtime behavior for Work and Demo modes, with browser execution standardized on Stagehand hybrid mode.
+This spec defines LangGraph runtime behavior for Work and Demo modes, with browser execution handled by Stagehand agent mode (`dom`, `cua`, or `hybrid`; default `hybrid`).
 
 ## Provider Contract
 - OpenRouter:
   - Voice transcription (`voxtral-small-24b-2507` path)
   - Work/demo orchestration chat model
 - Anthropic:
-  - Stagehand hybrid execution with locked model `anthropic/claude-haiku-4-5-20251001`
+  - Stagehand execution with locked model `anthropic/claude-haiku-4-5-20251001`
+  - Agent mode selectable via `STAGEHAND_AGENT_MODE` / Settings (`dom` | `cua` | `hybrid`)
 - ElevenLabs:
   - Optional TTS only
 
 ## Required Environment
 - Required: `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`
-- Optional: `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`
+- Optional: `STAGEHAND_AGENT_MODE`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`
 - App startup is allowed when required keys are missing, but Work/Demo runtime actions are blocked until required keys are configured.
 
 ## Work Graph

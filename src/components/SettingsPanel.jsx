@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 export default function SettingsPanel({
   open,
@@ -20,11 +21,115 @@ export default function SettingsPanel({
   const missing = settings?.missingRequiredKeys || [];
   const requiredReady = missing.length === 0;
   const skillList = skills || [];
+  const executionMode = draft.executionMode || 'hybrid';
   const [editingKeys, setEditingKeys] = useState({});
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const [tooltipPos, setTooltipPos] = useState({ top: 0, left: 0 });
+  const modeInfoBtnRef = useRef(null);
+  const modeTooltipRef = useRef(null);
+  const closeTooltipTimerRef = useRef(null);
 
   useEffect(() => {
     if (!open || !hasChanges) setEditingKeys({});
   }, [open, hasChanges]);
+
+  useEffect(
+    () => () => {
+      if (closeTooltipTimerRef.current) clearTimeout(closeTooltipTimerRef.current);
+    },
+    []
+  );
+
+  function updateTooltipPosition() {
+    const button = modeInfoBtnRef.current;
+    const tooltip = modeTooltipRef.current;
+    if (!button || !tooltip) return;
+
+    const margin = 12;
+    const buttonRect = button.getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+
+    let left = buttonRect.right - tooltipRect.width;
+    left = Math.max(margin, Math.min(left, window.innerWidth - tooltipRect.width - margin));
+
+    let top = buttonRect.bottom + 8;
+    if (top + tooltipRect.height > window.innerHeight - margin) {
+      top = buttonRect.top - tooltipRect.height - 8;
+    }
+    top = Math.max(margin, Math.min(top, window.innerHeight - tooltipRect.height - margin));
+
+    setTooltipPos({ top: Math.round(top), left: Math.round(left) });
+  }
+
+  useEffect(() => {
+    if (!tooltipOpen) return undefined;
+    updateTooltipPosition();
+    const onResize = () => updateTooltipPosition();
+    window.addEventListener('resize', onResize);
+    window.addEventListener('scroll', onResize, true);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('scroll', onResize, true);
+    };
+  }, [tooltipOpen]);
+
+  function openTooltip() {
+    if (closeTooltipTimerRef.current) clearTimeout(closeTooltipTimerRef.current);
+    setTooltipOpen(true);
+  }
+
+  function closeTooltipSoon() {
+    if (closeTooltipTimerRef.current) clearTimeout(closeTooltipTimerRef.current);
+    closeTooltipTimerRef.current = setTimeout(() => setTooltipOpen(false), 120);
+  }
+
+  function renderModeTooltip() {
+    if (!tooltipOpen) return null;
+    return createPortal(
+      <div
+        ref={modeTooltipRef}
+        className="mode-tooltip-floating"
+        role="tooltip"
+        style={{ top: `${tooltipPos.top}px`, left: `${tooltipPos.left}px` }}
+        onMouseEnter={openTooltip}
+        onMouseLeave={closeTooltipSoon}
+      >
+        <div className="mode-tooltip-scroll">
+          <table className="mode-tooltip-table">
+            <thead>
+              <tr>
+                <th />
+                <th>DOM</th>
+                <th>CUA</th>
+                <th>Hybrid</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th>Cost</th>
+                <td>🟢 Lowest (text-based DOM/a11y tree)</td>
+                <td>🟡 Medium (screenshots each step)</td>
+                <td>🔴 Highest (screenshots + DOM tools)</td>
+              </tr>
+              <tr>
+                <th>Speed</th>
+                <td>🟢 Fastest (no image processing)</td>
+                <td>🟡 Medium (image reasoning per step)</td>
+                <td>🔴 Slowest (both tool types available)</td>
+              </tr>
+              <tr>
+                <th>Accuracy</th>
+                <td>🟡 Good for structured pages, weaker on visual/dynamic UIs</td>
+                <td>🟡 Good for visual tasks, but can misclick coordinates</td>
+                <td>🟢 Most robust ("accounts for where each may fall short")</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>,
+      document.body
+    );
+  }
 
   function renderKeyField({ field, label, configured, type = 'password', optional = false }) {
     const isEditing = Boolean(editingKeys[field]);
@@ -79,7 +184,8 @@ export default function SettingsPanel({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="glass-modal modal-panel" onClick={(event) => event.stopPropagation()}>
-        <div className="settings-scroll">
+        <div className="settings-scroll-shell">
+          <div className="settings-scroll">
           <div className="panel-head">
             <h3>Settings</h3>
             <button type="button" className="icon-btn" onClick={onClose} aria-label="Close settings">
@@ -92,6 +198,40 @@ export default function SettingsPanel({
               ? 'Runtime ready'
               : `Missing required keys: ${missing.join(', ')}`}
           </p>
+
+          <div className="execution-mode-row">
+            <div className="execution-mode-head">
+              <span>Execution Mode</span>
+              <div className="mode-info-wrap">
+                <button
+                  ref={modeInfoBtnRef}
+                  type="button"
+                  className="mode-info-btn"
+                  aria-label="Execution mode comparison"
+                  onMouseEnter={openTooltip}
+                  onMouseLeave={closeTooltipSoon}
+                  onFocus={openTooltip}
+                  onBlur={closeTooltipSoon}
+                >
+                  i
+                </button>
+              </div>
+            </div>
+            <div className="glass-pill execution-mode-pill" role="radiogroup" aria-label="Execution mode">
+              {['dom', 'cua', 'hybrid'].map((modeValue) => (
+                <button
+                  key={modeValue}
+                  type="button"
+                  role="radio"
+                  aria-checked={executionMode === modeValue}
+                  className={executionMode === modeValue ? 'active' : ''}
+                  onClick={() => onDraftChange('executionMode', modeValue)}
+                >
+                  {modeValue.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div className="field-grid">
             {renderKeyField({
@@ -136,6 +276,7 @@ export default function SettingsPanel({
           </label>
 
           <div className="settings-meta">
+            <p>Mode: {(settings.executionMode || 'hybrid').toUpperCase()}</p>
             <p>Execution: {settings.executionModel || 'anthropic/claude-haiku-4-5-20251001'}</p>
             <p>Orchestrator: {settings.orchestratorModel || 'google/gemini-3-flash-preview'}</p>
             <p>Demo: {settings.demoModel || 'google/gemini-2.5-flash'}</p>
@@ -187,7 +328,9 @@ export default function SettingsPanel({
             </ul>
           </div>
         </div>
+        </div>
       </div>
+      {renderModeTooltip()}
     </div>
   );
 }

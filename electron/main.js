@@ -5,7 +5,7 @@ import { app, BrowserWindow, ipcMain, session } from 'electron';
 import ipcChannelsModule from './ipc-channels.cjs';
 import { registerMainWindow, pushStatus } from './status-bus.js';
 import { closeStagehand, getPage } from './stagehand-manager.js';
-import { getRuntimeSettings, persistEnvPatch } from './env-settings.js';
+import { getRuntimeSettings, normalizeExecutionMode, persistEnvPatch } from './env-settings.js';
 import { transcribeAudio } from '../voice/transcription.js';
 import { speak } from '../voice/tts.js';
 import { runOrchestratorTurn, interruptCurrentTask, resetOrchestratorState } from '../agent/orchestrator.js';
@@ -129,6 +129,7 @@ function settingsPayload() {
     elevenlabsConfigured: runtime.elevenlabsConfigured,
     elevenlabsVoiceConfigured: runtime.elevenlabsVoiceConfigured,
     debugMode: runtime.debugMode,
+    executionMode: runtime.executionMode,
     missingRequiredKeys: getMissingRequiredKeys(),
     executionModel: EXECUTION_MODEL,
     orchestratorModel: runtimeSettings.orchestratorModel,
@@ -371,6 +372,9 @@ ipcMain.handle(IPC_CHANNELS.SETTINGS_SET, async (_event, patch) => {
   }
   if (Object.prototype.hasOwnProperty.call(patch || {}, 'anthropicKey')) {
     envPatch.ANTHROPIC_API_KEY = String(patch.anthropicKey ?? '');
+  }
+  if (Object.prototype.hasOwnProperty.call(patch || {}, 'executionMode')) {
+    envPatch.STAGEHAND_AGENT_MODE = normalizeExecutionMode(patch.executionMode);
   }
   if (Object.prototype.hasOwnProperty.call(patch || {}, 'elevenlabsKey')) {
     envPatch.ELEVENLABS_API_KEY = String(patch.elevenlabsKey ?? '');

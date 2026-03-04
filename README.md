@@ -12,7 +12,8 @@ Universal is an Electron desktop app with a voice-first control panel and an age
   - Voxtral transcription in `/Users/an/Documents/helpinghand/voice/transcription.js`
   - LangGraph orchestrator/demo chat model in `/Users/an/Documents/helpinghand/agent/langgraph/model.js`
 - Anthropic:
-  - Stagehand browser execution in hybrid mode using locked model `anthropic/claude-haiku-4-5-20251001`
+  - Stagehand browser execution using locked model `anthropic/claude-haiku-4-5-20251001`
+  - Agent mode is configurable in Settings (`DOM`, `CUA`, `Hybrid`; default `Hybrid`)
 - ElevenLabs:
   - Optional TTS provider; system speech fallback remains available.
 
@@ -31,6 +32,7 @@ Universal is an Electron desktop app with a voice-first control panel and an age
   - `OPENROUTER_API_KEY`
   - `ANTHROPIC_API_KEY`
 - Optional:
+  - `STAGEHAND_AGENT_MODE` (`dom` | `cua` | `hybrid`, default `hybrid`)
   - `ELEVENLABS_API_KEY`
   - `ELEVENLABS_VOICE_ID`
 

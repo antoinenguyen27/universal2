@@ -63,7 +63,7 @@ export function getChromePath() {
 function requireAnthropicKey() {
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error(
-      'Missing ANTHROPIC_API_KEY. Hybrid execution requires Anthropic credentials.'
+      'Missing ANTHROPIC_API_KEY. Browser execution requires Anthropic credentials.'
     );
   }
 }

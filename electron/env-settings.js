@@ -8,10 +8,12 @@ const ENV_PATH = path.join(__dirname, '../.env');
 const SUPPORTED_ENV_KEYS = [
   'OPENROUTER_API_KEY',
   'ANTHROPIC_API_KEY',
+  'STAGEHAND_AGENT_MODE',
   'ELEVENLABS_API_KEY',
   'ELEVENLABS_VOICE_ID',
   'DEBUG_MODE'
 ];
+const EXECUTION_MODES = ['dom', 'cua', 'hybrid'];
 
 function parseLine(line) {
   const trimmed = line.trim();
@@ -42,10 +44,18 @@ function quoteEnvValue(value) {
   return value;
 }
 
+export function normalizeExecutionMode(value) {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase();
+  return EXECUTION_MODES.includes(normalized) ? normalized : 'hybrid';
+}
+
 export function getRuntimeSettings() {
   return {
     openrouterConfigured: Boolean(process.env.OPENROUTER_API_KEY),
     anthropicConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
+    executionMode: normalizeExecutionMode(process.env.STAGEHAND_AGENT_MODE),
     elevenlabsConfigured: Boolean(process.env.ELEVENLABS_API_KEY),
     elevenlabsVoiceConfigured: Boolean(process.env.ELEVENLABS_VOICE_ID),
     debugMode: readBooleanEnv(process.env.DEBUG_MODE, false)
@@ -58,6 +68,10 @@ export async function persistEnvPatch(patch = {}) {
     if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
     if (key === 'DEBUG_MODE') {
       normalized[key] = patch[key] ? 'true' : '';
+      continue;
+    }
+    if (key === 'STAGEHAND_AGENT_MODE') {
+      normalized[key] = normalizeExecutionMode(patch[key]);
       continue;
     }
     normalized[key] = envValue(String(patch[key] ?? ''));

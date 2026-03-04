@@ -17,6 +17,7 @@ const DEMO_STAGE = {
 const INITIAL_SETTINGS_DRAFT = {
   openrouterKey: '',
   anthropicKey: '',
+  executionMode: 'hybrid',
   elevenlabsKey: '',
   elevenlabsVoiceId: '',
   debugMode: false
@@ -54,6 +55,7 @@ async function playAudioFromBase64(audioBase64, mimeType = 'audio/mpeg') {
 function settingsToDraft(next = {}) {
   return {
     ...INITIAL_SETTINGS_DRAFT,
+    executionMode: next.executionMode || 'hybrid',
     debugMode: Boolean(next.debugMode)
   };
 }
@@ -402,6 +404,9 @@ export default function App() {
       const payload = { debugMode: settingsDraft.debugMode };
       if (settingsTouched.openrouterKey) payload.openrouterKey = settingsDraft.openrouterKey;
       if (settingsTouched.anthropicKey) payload.anthropicKey = settingsDraft.anthropicKey;
+      if (settingsDraft.executionMode !== (settings.executionMode || 'hybrid')) {
+        payload.executionMode = settingsDraft.executionMode;
+      }
       if (settingsTouched.elevenlabsKey) payload.elevenlabsKey = settingsDraft.elevenlabsKey;
       if (settingsTouched.elevenlabsVoiceId) payload.elevenlabsVoiceId = settingsDraft.elevenlabsVoiceId;
       const result = await ua.setSettings(payload);
@@ -418,7 +423,7 @@ export default function App() {
     } finally {
       setSettingsSaving(false);
     }
-  }, [appendStatus, refreshSkills, settingsDraft, settingsTouched, ua]);
+  }, [appendStatus, refreshSkills, settings, settingsDraft, settingsTouched, ua]);
 
   const deleteSkillFromSettings = useCallback(
     async (skill) => {
@@ -456,9 +461,11 @@ export default function App() {
       Boolean(settingsTouched.anthropicKey) ||
       Boolean(settingsTouched.elevenlabsKey) ||
       Boolean(settingsTouched.elevenlabsVoiceId);
+    const executionModeChanged =
+      String(settingsDraft.executionMode || 'hybrid') !== String(settings.executionMode || 'hybrid');
     const debugChanged = Boolean(settingsDraft.debugMode) !== Boolean(settings.debugMode);
-    return keyFieldsTouched || debugChanged;
-  }, [settings.debugMode, settingsDraft.debugMode, settingsTouched]);
+    return keyFieldsTouched || executionModeChanged || debugChanged;
+  }, [settings.debugMode, settings.executionMode, settingsDraft.debugMode, settingsDraft.executionMode, settingsTouched]);
 
   const modeIndicator = useMemo(
     () =>
