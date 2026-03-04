@@ -5,8 +5,36 @@ import { runDemoGraphTurn, resetDemoGraphState } from './langgraph/runtime.js';
 const state = {
   active: false,
   pageUrl: 'https://example.com',
-  lastGraphState: null
+  lastGraphState: null,
+  timelineStartEpochMs: 0
 };
+
+function toRelativeMs(epochMs, timelineStartEpochMs) {
+  if (!Number.isFinite(epochMs) || !Number.isFinite(timelineStartEpochMs) || timelineStartEpochMs <= 0) {
+    return null;
+  }
+  return Math.max(0, Math.round(epochMs - timelineStartEpochMs));
+}
+
+function normalizeTranscriptTiming(segmentTiming, timelineStartEpochMs) {
+  const startedAtEpochMs = Number(segmentTiming?.segmentStartedAtMs);
+  const endedAtEpochMs = Number(segmentTiming?.segmentEndedAtMs);
+  const providedDurationMs = Number(segmentTiming?.segmentDurationMs);
+
+  const tStartMs = toRelativeMs(startedAtEpochMs, timelineStartEpochMs);
+  const tEndMs = toRelativeMs(endedAtEpochMs, timelineStartEpochMs);
+
+  let durationMs = Number.isFinite(providedDurationMs) && providedDurationMs > 0 ? Math.round(providedDurationMs) : null;
+  if (!durationMs && Number.isFinite(tStartMs) && Number.isFinite(tEndMs)) {
+    durationMs = Math.max(0, tEndMs - tStartMs);
+  }
+
+  return {
+    tStartMs,
+    tEndMs,
+    durationMs
+  };
+}
 
 async function getCurrentPageUrl() {
   const page = await getPage().catch(() => null);
@@ -25,6 +53,7 @@ export async function startDemoSession() {
   state.active = true;
   state.pageUrl = pageUrl;
   state.lastGraphState = null;
+  state.timelineStartEpochMs = Date.now();
   resetDemoGraphState();
 
   pushStatus('Demo mode active. Narrate your actions while demonstrating in Chrome.', 'status');
@@ -40,6 +69,7 @@ export async function endDemoSession() {
   const hadActiveSession = state.active;
   state.active = false;
   state.lastGraphState = null;
+  state.timelineStartEpochMs = 0;
 
   if (hadActiveSession) {
     pushStatus('Demo mode ended.', 'status');
@@ -48,16 +78,19 @@ export async function endDemoSession() {
   return summary;
 }
 
-export async function handleVoiceSegment(transcript) {
+export async function handleVoiceSegment(transcript, segmentTiming) {
   if (!state.active) {
     return { agentMessage: 'Demo mode is not active.', skillWritten: null, awaitingConfirmation: false };
   }
 
   state.pageUrl = await getCurrentPageUrl();
+  const transcriptTiming = normalizeTranscriptTiming(segmentTiming || {}, state.timelineStartEpochMs);
   const result = await runDemoGraphTurn({
     eventType: 'voice',
     transcript,
-    pageUrl: state.pageUrl
+    pageUrl: state.pageUrl,
+    demoTimelineStartEpochMs: state.timelineStartEpochMs,
+    transcriptTiming
   });
 
   state.lastGraphState = result.state;
@@ -82,7 +115,8 @@ export async function finalizeDemoCaptureForReview() {
   const result = await runDemoGraphTurn({
     eventType: 'finalize',
     transcript: '',
-    pageUrl: state.pageUrl
+    pageUrl: state.pageUrl,
+    demoTimelineStartEpochMs: state.timelineStartEpochMs
   });
 
   state.lastGraphState = result.state;
@@ -106,7 +140,8 @@ export async function saveDraftFromReview() {
   const result = await runDemoGraphTurn({
     eventType: 'save',
     transcript: '',
-    pageUrl: state.pageUrl
+    pageUrl: state.pageUrl,
+    demoTimelineStartEpochMs: state.timelineStartEpochMs
   });
 
   state.lastGraphState = result.state;

@@ -19,6 +19,7 @@ export function useDemoRecorder({ onSegment, onLog }) {
   const recordingStartedAtRef = useRef(0);
   const hasDetectedSpeechRef = useRef(false);
   const stopResolversRef = useRef([]);
+  const activeSegmentStartedAtRef = useRef(0);
 
   const resolveStopWaiters = useCallback(() => {
     if (!stopResolversRef.current.length) return;
@@ -38,10 +39,11 @@ export function useDemoRecorder({ onSegment, onLog }) {
     };
 
     recorder.start(100);
+    activeSegmentStartedAtRef.current = Date.now();
   }, []);
 
   const processSegmentBlob = useCallback(
-    async (blob) => {
+    async (blob, timing = {}) => {
       if (blob.size < 1000) {
         onLog?.('Demo segment skipped: audio too short or silent (under 1000 bytes).', 'warning');
         return;
@@ -66,7 +68,11 @@ export function useDemoRecorder({ onSegment, onLog }) {
       } else {
         onLog?.(`Demo segment ready: ${blob.size} bytes. Sending original webm for transcription.`, 'warning');
       }
-      await onSegment(payload.audioBase64, payload.audioFormat);
+      await onSegment(payload.audioBase64, payload.audioFormat, {
+        segmentStartedAtMs: Number.isFinite(timing.segmentStartedAtMs) ? timing.segmentStartedAtMs : null,
+        segmentEndedAtMs: Number.isFinite(timing.segmentEndedAtMs) ? timing.segmentEndedAtMs : null,
+        segmentDurationMs: typeof payload.durationMs === 'number' ? payload.durationMs : null
+      });
     },
     [onLog, onSegment]
   );
@@ -77,11 +83,14 @@ export function useDemoRecorder({ onSegment, onLog }) {
       if (!recorder || recorder.state === 'inactive') return false;
 
       recorder.onstop = () => {
+        const stoppedAtMs = Date.now();
+        const segmentStartedAtMs = activeSegmentStartedAtRef.current || stoppedAtMs;
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         chunksRef.current = [];
+        activeSegmentStartedAtRef.current = 0;
 
         segmentQueueRef.current = segmentQueueRef.current
-          .then(() => processSegmentBlob(blob))
+          .then(() => processSegmentBlob(blob, { segmentStartedAtMs, segmentEndedAtMs: stoppedAtMs }))
           .catch((error) => {
             onLog?.(`Demo segment processing failed: ${String(error?.message || error)}`, 'error');
           });

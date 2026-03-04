@@ -22,51 +22,220 @@ function normalizeDemoPayload(payload) {
   };
 }
 
-function renderVoiceContext(segments = []) {
-  if (!segments.length) return '- (none)';
-  return segments.map((segment) => `- ${segment.transcript}`).join('\n');
+const DEMO_SYNTHESIS_MAX_TOKENS = Number(process.env.DEMO_SYNTHESIS_MAX_TOKENS || 2000);
+const DEMO_PARSE_FALLBACK_MESSAGE = "I couldn't parse the draft output. I can retry now.";
+
+function formatMs(value) {
+  if (!Number.isFinite(value) || value < 0) return 'unknown';
+  return `${Math.round(value)}ms`;
 }
 
-function renderObservedContext(observedElements = []) {
-  if (!observedElements.length) return '(No observed interactive elements.)';
-  return observedElements
-    .slice(0, 20)
-    .map((element, index) => `${index + 1}. "${element.description}" [${element.method || 'act'}]`)
+function toRelativeMs(epochMs, timelineStartEpochMs) {
+  if (!Number.isFinite(epochMs) || !Number.isFinite(timelineStartEpochMs) || timelineStartEpochMs <= 0) {
+    return null;
+  }
+  return Math.max(0, Math.round(epochMs - timelineStartEpochMs));
+}
+
+function renderVoiceContext(segments = []) {
+  if (!segments.length) return '- (none)';
+  return segments
+    .map((segment) => {
+      const tStart = formatMs(segment.tStartMs);
+      const tEnd = formatMs(segment.tEndMs);
+      const receivedAt = formatMs(segment.receivedAtMs);
+      return `- [${tStart} -> ${tEnd}] (received=${receivedAt}) ${segment.transcript}`;
+    })
     .join('\n');
 }
 
-async function synthesizeDraft({ pageUrl, voiceSegments, observedElements, currentDraft, correction }) {
+function renderObservedContext(observationTimeline = []) {
+  if (!observationTimeline.length) return '(No observed interactive elements.)';
+  return observationTimeline
+    .slice(-6)
+    .map((snapshot, index) => {
+      const header = `${index + 1}. t=${formatMs(snapshot.observedAtMs)} source=${snapshot.source || 'unknown'} weakContext=${snapshot.weakContext ? 'yes' : 'no'}`;
+      const lines = (snapshot.observedElements || [])
+        .slice(0, 12)
+        .map((element, itemIndex) => `   ${itemIndex + 1}) "${element.description}" [${element.method || 'act'}]`)
+        .join('\n');
+      return `${header}\n${lines || '   (none)'}`;
+    })
+    .join('\n');
+}
+
+function extractTextContent(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+
+  return content
+    .map((part) => {
+      if (typeof part === 'string') return part;
+      if (typeof part?.text === 'string') return part.text;
+      return '';
+    })
+    .join('\n')
+    .trim();
+}
+
+function extractJsonCandidate(text = '') {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const source = fenceMatch?.[1] ? fenceMatch[1].trim() : raw;
+  const start = source.indexOf('{');
+  if (start < 0) return source;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < source.length; i += 1) {
+    const ch = source[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '{') depth += 1;
+    if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(start, i + 1);
+      }
+    }
+  }
+
+  return source.slice(start);
+}
+
+function isValidDemoPayloadShape(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+
+  const fieldsValid =
+    (payload.message === undefined || typeof payload.message === 'string') &&
+    (payload.updatedDraft === undefined || payload.updatedDraft === null || typeof payload.updatedDraft === 'string') &&
+    (payload.skillComplete === undefined || typeof payload.skillComplete === 'boolean') &&
+    (payload.finalSkill === undefined || payload.finalSkill === null || typeof payload.finalSkill === 'string') &&
+    (payload.skillName === undefined || payload.skillName === null || typeof payload.skillName === 'string');
+
+  if (!fieldsValid) return false;
+
+  const hasUsefulContent =
+    (typeof payload.message === 'string' && payload.message.trim().length > 0) ||
+    (typeof payload.updatedDraft === 'string' && payload.updatedDraft.trim().length > 0) ||
+    (typeof payload.finalSkill === 'string' && payload.finalSkill.trim().length > 0);
+
+  return hasUsefulContent || payload.skillComplete === true;
+}
+
+function maybeTruncated(completion, rawText = '') {
+  const finishReason =
+    completion?.response_metadata?.finish_reason ||
+    completion?.response_metadata?.stop_reason ||
+    completion?.additional_kwargs?.finish_reason ||
+    '';
+  if (String(finishReason).toLowerCase().includes('length')) return true;
+
+  const trimmed = String(rawText || '').trim();
+  if (!trimmed) return false;
+  if (trimmed.includes('{') && !trimmed.includes('}')) return true;
+  return false;
+}
+
+async function invokeSynthesisModel(model, prompt) {
+  return model.invoke([
+    new SystemMessage(DEMO_AGENT_SYSTEM_PROMPT),
+    new HumanMessage(prompt)
+  ]);
+}
+
+async function synthesizeDraft({ pageUrl, voiceSegments, observationTimeline, currentDraft, correction }) {
   const model = createOpenRouterChatModel({
     model: process.env.DEMO_MODEL || 'google/gemini-2.5-flash',
     temperature: 0.1,
-    maxTokens: 500
+    maxTokens: DEMO_SYNTHESIS_MAX_TOKENS
   });
 
-  const completion = await model.invoke([
-    new SystemMessage(DEMO_AGENT_SYSTEM_PROMPT),
-    new HumanMessage(`Site: ${normalizeDomain(pageUrl)}
+  const basePrompt = `Site: ${normalizeDomain(pageUrl)}
 Page URL: ${pageUrl}
 Voice:
 ${renderVoiceContext(voiceSegments)}
 
 Observed elements:
-${renderObservedContext(observedElements)}
+${renderObservedContext(observationTimeline)}
 
 Current draft:
 ${currentDraft || '(none)'}
 
 Correction from user: ${correction || '(none)'}
 
-Return strict JSON only.`)
-  ]);
+Return strict JSON only.`;
 
-  const parsed = safeJsonParse(typeof completion.content === 'string' ? completion.content : '', null);
-  return normalizeDemoPayload(parsed || {});
+  const completion = await invokeSynthesisModel(model, basePrompt);
+  const rawText = extractTextContent(completion?.content);
+  const candidate = extractJsonCandidate(rawText);
+  const parsed = safeJsonParse(candidate, null);
+  if (maybeTruncated(completion, rawText)) {
+    pushStatus('Demo synthesis output may be truncated (finish_reason=length or incomplete JSON).', 'warning');
+  }
+
+  if (isValidDemoPayloadShape(parsed)) {
+    pushStatus('Demo synthesis parse succeeded.', 'api');
+    return normalizeDemoPayload(parsed);
+  }
+
+  pushStatus('Demo synthesis parse failed; attempting one JSON repair retry.', 'warning');
+  const snippet = String(rawText || '').slice(0, 1800);
+  const repairPrompt = `The previous output could not be parsed as valid JSON for this schema:
+{
+  "message": "string",
+  "updatedDraft": "string or null",
+  "skillComplete": true/false,
+  "finalSkill": "string or null",
+  "skillName": "string or null"
+}
+
+Return only one valid JSON object and nothing else.
+Previous output:
+${snippet || '(empty)'}`;
+
+  const repairedCompletion = await invokeSynthesisModel(model, repairPrompt);
+  const repairedRawText = extractTextContent(repairedCompletion?.content);
+  const repairedCandidate = extractJsonCandidate(repairedRawText);
+  const repairedParsed = safeJsonParse(repairedCandidate, null);
+  if (maybeTruncated(repairedCompletion, repairedRawText)) {
+    pushStatus('Demo synthesis repair output may be truncated.', 'warning');
+  }
+
+  if (isValidDemoPayloadShape(repairedParsed)) {
+    pushStatus('Demo synthesis repair retry succeeded.', 'api');
+    return normalizeDemoPayload(repairedParsed);
+  }
+
+  pushStatus('Demo synthesis repair retry failed; using fallback response.', 'warning');
+  return {
+    message: DEMO_PARSE_FALLBACK_MESSAGE,
+    updatedDraft: currentDraft || null,
+    skillComplete: false,
+    finalSkill: null,
+    skillName: 'new-skill'
+  };
 }
 
 async function ingestDemoEvent(state) {
   const eventType = state.eventType || 'voice';
   const transcript = String(state.transcript || '').trim();
+  const transcriptTiming = state.transcriptTiming || null;
+  const timelineStartEpochMs = Number(state.demoTimelineStartEpochMs) || 0;
 
   const next = {
     saveRequested: eventType === 'save',
@@ -76,8 +245,16 @@ async function ingestDemoEvent(state) {
   };
 
   if (eventType === 'voice' && transcript) {
+    const receivedAtMs = toRelativeMs(Date.now(), timelineStartEpochMs);
     next.messages = [new HumanMessage(transcript)];
-    next.pendingVoice = [{ transcript, timestamp: Date.now() }];
+    next.pendingVoice = [
+      {
+        transcript,
+        tStartMs: Number.isFinite(transcriptTiming?.tStartMs) ? transcriptTiming.tStartMs : null,
+        tEndMs: Number.isFinite(transcriptTiming?.tEndMs) ? transcriptTiming.tEndMs : null,
+        receivedAtMs: Number.isFinite(receivedAtMs) ? receivedAtMs : 0
+      }
+    ];
   }
 
   return next;
@@ -89,10 +266,19 @@ async function contextCollect(state) {
   try {
     const observe = await runObservePage({
       reason: state.eventType === 'finalize' ? 'review-start' : 'demo-voice',
-      limit: 25
+      limit: 25,
+      timelineStartEpochMs: Number(state.demoTimelineStartEpochMs) || 0
     });
     return {
       observedElements: observe.observedElements,
+      observationTimeline: [
+        {
+          observedAtMs: Number.isFinite(observe.observedAtMs) ? observe.observedAtMs : null,
+          source: observe.source || 'stagehand',
+          weakContext: Boolean(observe.weakContext),
+          observedElements: observe.observedElements || []
+        }
+      ],
       pageUrl: observe.url
     };
   } catch (error) {
@@ -118,10 +304,18 @@ async function demoSynthesisAgent(state) {
     }
 
     if (isCorrection(transcript)) {
+      const receivedAtMs = toRelativeMs(Date.now(), Number(state.demoTimelineStartEpochMs) || 0);
       const revised = await synthesizeDraft({
         pageUrl: state.pageUrl || 'https://example.com',
-        voiceSegments: [{ transcript, timestamp: Date.now() }],
-        observedElements: state.observedElements || [],
+        voiceSegments: [
+          {
+            transcript,
+            tStartMs: Number.isFinite(state.transcriptTiming?.tStartMs) ? state.transcriptTiming.tStartMs : null,
+            tEndMs: Number.isFinite(state.transcriptTiming?.tEndMs) ? state.transcriptTiming.tEndMs : null,
+            receivedAtMs: Number.isFinite(receivedAtMs) ? receivedAtMs : 0
+          }
+        ],
+        observationTimeline: state.observationTimeline || [],
         currentDraft: state.awaitingConfirmation.finalSkill,
         correction: transcript
       });
@@ -140,8 +334,7 @@ async function demoSynthesisAgent(state) {
 
       return {
         currentSkillDraft: revised.updatedDraft || state.currentSkillDraft,
-        agentMessage:
-          revised.message || 'I need one more clarification before I can finalize the skill. Reply with the detail.'
+        agentMessage: revised.message || DEMO_PARSE_FALLBACK_MESSAGE
       };
     }
   }
@@ -155,13 +348,13 @@ async function demoSynthesisAgent(state) {
   const reviewSegments = state.reviewRequested
     ? state.pendingVoice.length
       ? state.pendingVoice
-      : [{ transcript: 'User ended demo capture and wants to finalize the skill.', timestamp: Date.now() }]
+      : [{ transcript: 'User ended demo capture and wants to finalize the skill.', tStartMs: null, tEndMs: null, receivedAtMs: 0 }]
     : state.pendingVoice;
 
   const synthesis = await synthesizeDraft({
     pageUrl: state.pageUrl || 'https://example.com',
     voiceSegments: reviewSegments,
-    observedElements: state.observedElements || [],
+    observationTimeline: state.observationTimeline || [],
     currentDraft: state.currentSkillDraft,
     correction: state.reviewRequested
       ? 'User ended demo capture and entered review. Ask one concise clarifying question if needed, otherwise finalize.'
@@ -190,8 +383,7 @@ async function demoSynthesisAgent(state) {
   }
 
   return {
-    agentMessage:
-      synthesis.message || 'I need one more clarification before I can finalize the skill. Reply with the detail.'
+    agentMessage: synthesis.message || DEMO_PARSE_FALLBACK_MESSAGE
   };
 }
 
@@ -220,6 +412,7 @@ async function saveSkillNode(state) {
     awaitingConfirmation: null,
     currentSkillDraft: null,
     pendingVoice: [],
+    observationTimeline: [],
     saveRequested: false,
     skillWritten: saved,
     agentMessage: `Saved '${pending.skillName}' for ${pending.domain}.`

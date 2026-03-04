@@ -42,13 +42,15 @@ export async function runWorkGraphTurn({ userVoice, pageUrl }) {
   };
 }
 
-export async function runDemoGraphTurn({ eventType, transcript, pageUrl }) {
+export async function runDemoGraphTurn({ eventType, transcript, pageUrl, demoTimelineStartEpochMs, transcriptTiming }) {
   const graph = getDemoGraph();
   const state = await graph.invoke(
     {
       eventType,
       transcript: transcript || '',
-      pageUrl: pageUrl || 'https://example.com'
+      pageUrl: pageUrl || 'https://example.com',
+      demoTimelineStartEpochMs: Number.isFinite(demoTimelineStartEpochMs) ? demoTimelineStartEpochMs : 0,
+      transcriptTiming: transcriptTiming || null
     },
     graphConfig(demoThreadId)
   );

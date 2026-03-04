@@ -12,6 +12,7 @@ export function useWorkRecorder({ onRecording, enableStopWordDetection, onInterr
   const recognitionRef = useRef(null);
   const startSeqRef = useRef(0);
   const stopRequestedRef = useRef(false);
+  const startedAtMsRef = useRef(0);
 
   const startListening = useCallback(async () => {
     if (isListening || isStarting) return;
@@ -41,6 +42,7 @@ export function useWorkRecorder({ onRecording, enableStopWordDetection, onInterr
       };
 
       recorder.onstop = async () => {
+        const stoppedAtMs = Date.now();
         setIsListening(false);
         try {
           const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
@@ -54,11 +56,16 @@ export function useWorkRecorder({ onRecording, enableStopWordDetection, onInterr
                 : `Work segment sent as original webm (${blob.size} bytes source).`,
               payload.convertedToWav ? 'status' : 'warning'
             );
-            await onRecording(payload.audioBase64, payload.audioFormat);
+            await onRecording(payload.audioBase64, payload.audioFormat, {
+              segmentStartedAtMs: startedAtMsRef.current || null,
+              segmentEndedAtMs: stoppedAtMs,
+              segmentDurationMs: typeof payload.durationMs === 'number' ? payload.durationMs : null
+            });
           } else {
             onLog?.('Work segment conversion failed: base64 payload empty.', 'error');
           }
         } finally {
+          startedAtMsRef.current = 0;
           stream.getTracks().forEach((track) => track.stop());
           if (streamRef.current === stream) streamRef.current = null;
           if (mediaRecorderRef.current === recorder) mediaRecorderRef.current = null;
@@ -66,6 +73,7 @@ export function useWorkRecorder({ onRecording, enableStopWordDetection, onInterr
       };
 
       recorder.start();
+      startedAtMsRef.current = Date.now();
       if (startSeqRef.current !== seq || stopRequestedRef.current) {
         if (recorder.state === 'recording') recorder.stop();
         return;

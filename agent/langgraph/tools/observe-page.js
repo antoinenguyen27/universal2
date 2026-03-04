@@ -75,7 +75,14 @@ async function fallbackDomObserve(page, limit = 25) {
     .catch(() => []);
 }
 
-export async function runObservePage({ reason = 'manual', limit = 25 } = {}) {
+function toRelativeMs(epochMs, timelineStartEpochMs) {
+  if (!Number.isFinite(epochMs) || !Number.isFinite(timelineStartEpochMs) || timelineStartEpochMs <= 0) {
+    return null;
+  }
+  return Math.max(0, Math.round(epochMs - timelineStartEpochMs));
+}
+
+export async function runObservePage({ reason = 'manual', limit = 25, timelineStartEpochMs = 0 } = {}) {
   const page = await getPage();
   const sh = await getStagehand();
   const pageUrl = typeof page.url === 'function' ? page.url() : 'https://example.com';
@@ -100,11 +107,13 @@ export async function runObservePage({ reason = 'manual', limit = 25 } = {}) {
 
   const trimmed = observed.slice(0, Math.max(1, Math.min(limit, 50)));
   const weakContext = isWeakObservedContext(trimmed);
+  const observedAtMs = toRelativeMs(Date.now(), Number(timelineStartEpochMs));
 
   pushStatus(`Observed ${trimmed.length} elements (reason=${reason}, source=${observeSource}).`, 'status');
 
   return {
     url: pageUrl,
+    observedAtMs,
     observedElements: trimmed,
     source: observeSource,
     weakContext

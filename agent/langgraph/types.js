@@ -34,9 +34,12 @@
  * @property {import('@langchain/core/messages').BaseMessage[]} messages
  * @property {'voice'|'finalize'|'save'=} eventType
  * @property {string=} transcript
+ * @property {{tStartMs: number|null, tEndMs: number|null, durationMs: number|null}=} transcriptTiming
  * @property {string=} pageUrl
- * @property {Array<{transcript: string, timestamp: number}>=} pendingVoice
+ * @property {number=} demoTimelineStartEpochMs
+ * @property {Array<{transcript: string, tStartMs: number|null, tEndMs: number|null, receivedAtMs: number}>=} pendingVoice
  * @property {Array<{description: string, method: string}>=} observedElements
+ * @property {Array<{observedAtMs: number|null, source: string, weakContext: boolean, observedElements: Array<{description: string, method: string}>}>=} observationTimeline
  * @property {string=} currentSkillDraft
  * @property {{finalSkill: string, skillName: string, domain: string}=} awaitingConfirmation
  * @property {boolean=} saveRequested

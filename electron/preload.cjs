@@ -18,8 +18,8 @@ const IPC_CHANNELS = {
 };
 
 contextBridge.exposeInMainWorld('ua', {
-  processVoice: (audioBase64, mode, audioFormat, demoStage) =>
-    ipcRenderer.invoke(IPC_CHANNELS.VOICE_PROCESS, { audioBase64, mode, audioFormat, demoStage }),
+  processVoice: (audioBase64, mode, audioFormat, demoStage, segmentTiming) =>
+    ipcRenderer.invoke(IPC_CHANNELS.VOICE_PROCESS, { audioBase64, mode, audioFormat, demoStage, segmentTiming }),
   processText: (text, mode) => ipcRenderer.invoke(IPC_CHANNELS.WORK_TEXT_PROCESS, { text, mode }),
   startDemo: () => ipcRenderer.invoke(IPC_CHANNELS.DEMO_START),
   endDemo: () => ipcRenderer.invoke(IPC_CHANNELS.DEMO_END),

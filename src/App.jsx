@@ -81,6 +81,9 @@ export default function App() {
   const [demoReviewBusy, setDemoReviewBusy] = useState(false);
   const [demoCanFinalize, setDemoCanFinalize] = useState(false);
   const [demoSessionActive, setDemoSessionActive] = useState(false);
+  const [demoStarting, setDemoStarting] = useState(false);
+  const [modeSwitchBusy, setModeSwitchBusy] = useState(false);
+  const [modeSwitchTarget, setModeSwitchTarget] = useState(null);
   const [chatInput, setChatInput] = useState('');
   const [chatComposerOpen, setChatComposerOpen] = useState(false);
   const previousModeRef = useRef(null);
@@ -143,7 +146,7 @@ export default function App() {
   }, [ua]);
 
   const processSegment = useCallback(
-    async (audioBase64, segmentMode, audioFormat = 'webm', demoStageContext = null) => {
+    async (audioBase64, segmentMode, audioFormat = 'webm', demoStageContext = null, segmentTiming = null) => {
       if (!ua) throw new Error('Electron bridge unavailable (window.ua missing).');
       setPendingAgentOps((value) => value + 1);
       appendStatus(
@@ -151,7 +154,7 @@ export default function App() {
         `Sending audio segment for processing (mode=${segmentMode}, format=${audioFormat}${demoStageContext ? `, stage=${demoStageContext}` : ''}).`
       );
       try {
-        const result = await ua.processVoice(audioBase64, segmentMode, audioFormat, demoStageContext);
+        const result = await ua.processVoice(audioBase64, segmentMode, audioFormat, demoStageContext, segmentTiming);
         appendStatus(
           result.error ? 'error' : 'status',
           result.error
@@ -219,9 +222,9 @@ export default function App() {
   const { isRecording: isDemoRecording, toggle: toggleDemoRecording, stopAndFlush: stopDemoAndFlush } =
     useDemoRecorder({
       onLog: (message, type = 'status') => appendStatus(type, message),
-      onSegment: async (audioBase64, audioFormat) => {
+      onSegment: async (audioBase64, audioFormat, segmentTiming) => {
         try {
-          await processSegment(audioBase64, MODES.DEMO, audioFormat, DEMO_STAGE.CAPTURE);
+          await processSegment(audioBase64, MODES.DEMO, audioFormat, DEMO_STAGE.CAPTURE, segmentTiming);
         } catch (error) {
           appendStatus('error', `Demo segment failed: ${error.message}`);
         }
@@ -240,14 +243,22 @@ export default function App() {
     demoSessionActiveRef.current = demoSessionActive;
   }, [demoSessionActive]);
 
+  const resetDemoUiState = useCallback(() => {
+    setDemoStage(DEMO_STAGE.CAPTURE);
+    setDemoAwaitingConfirmation(false);
+    setDemoCanFinalize(false);
+    setDemoSessionActive(false);
+    setDemoStarting(false);
+  }, []);
+
   const { isListening: isDemoReplyListening, startListening: startDemoReply, stopListening: stopDemoReply } =
     useWorkRecorder({
       enableStopWordDetection: false,
       onInterrupt: undefined,
-      onRecording: async (audioBase64, audioFormat) => {
+      onRecording: async (audioBase64, audioFormat, segmentTiming) => {
         try {
           setProcessing(true);
-          await processSegment(audioBase64, MODES.DEMO, audioFormat, DEMO_STAGE.REVIEW);
+          await processSegment(audioBase64, MODES.DEMO, audioFormat, DEMO_STAGE.REVIEW, segmentTiming);
         } catch (error) {
           appendStatus('error', `Demo review reply failed: ${error.message}`);
         } finally {
@@ -263,11 +274,11 @@ export default function App() {
       appendStatus('interrupt', 'Stop word detected. Interrupting current execution task.');
       if (ua) await ua.interruptExecution();
     },
-    onRecording: async (audioBase64, audioFormat) => {
+    onRecording: async (audioBase64, audioFormat, segmentTiming) => {
       try {
         setProcessing(true);
         appendStatus('status', 'Thinking...');
-        await processSegment(audioBase64, MODES.WORK, audioFormat);
+        await processSegment(audioBase64, MODES.WORK, audioFormat, null, segmentTiming);
       } catch (error) {
         appendStatus('error', `Work command failed: ${error.message}`);
       } finally {
@@ -306,15 +317,16 @@ export default function App() {
   }, [appendStatus, appendUserVoiceChat, refreshSettings, refreshSkills, ua]);
 
   useEffect(() => {
-    if (!ua) return;
+    if (!ua) {
+      setModeSwitchBusy(false);
+      setModeSwitchTarget(null);
+      return;
+    }
     let cancelled = false;
 
     const syncMode = async () => {
       if (mode === MODES.DEMO) {
-        setDemoStage(DEMO_STAGE.CAPTURE);
-        setDemoAwaitingConfirmation(false);
-        setDemoCanFinalize(false);
-        setDemoSessionActive(false);
+        resetDemoUiState();
       } else if (previousModeRef.current === MODES.DEMO) {
         try {
           if (isDemoRecordingRef.current) {
@@ -328,20 +340,62 @@ export default function App() {
           if (!cancelled) appendStatus('error', `Failed to end demo mode cleanly: ${error.message}`);
         }
         if (!cancelled) {
-          setDemoStage(DEMO_STAGE.CAPTURE);
-          setDemoAwaitingConfirmation(false);
-          setDemoCanFinalize(false);
-          setDemoSessionActive(false);
+          resetDemoUiState();
         }
+      }
+      if (!cancelled) {
+        setModeSwitchBusy(false);
+        setModeSwitchTarget(null);
       }
     };
 
-    syncMode();
+    syncMode().catch((error) => {
+      if (!cancelled) {
+        appendStatus('error', `Mode switch sync failed: ${error.message}`);
+        setModeSwitchBusy(false);
+        setModeSwitchTarget(null);
+      }
+    });
     previousModeRef.current = mode;
     return () => {
       cancelled = true;
     };
-  }, [mode, appendStatus, ua]);
+  }, [mode, appendStatus, resetDemoUiState, ua]);
+
+  const handleModeSelect = useCallback(
+    (nextMode) => {
+      if (nextMode === mode || modeSwitchBusy) return;
+      if (!ua) {
+        setMode(nextMode);
+        return;
+      }
+      setModeSwitchBusy(true);
+      setModeSwitchTarget(nextMode);
+      setMode(nextMode);
+    },
+    [mode, modeSwitchBusy, ua]
+  );
+
+  const resetDemoFlow = useCallback(async () => {
+    if (!ua || demoReviewBusy || demoStarting) return;
+    setDemoReviewBusy(true);
+    try {
+      if (isDemoReplyListening) stopDemoReply();
+      if (isDemoRecordingRef.current) {
+        appendStatus('status', 'Try Again requested: stopping recording and flushing final segment.');
+        await stopDemoAndFlushRef.current();
+      }
+      if (demoSessionActiveRef.current) {
+        await ua.endDemo();
+      }
+      resetDemoUiState();
+      appendStatus('status', 'Demo reset. Ready to start a new recording.');
+    } catch (error) {
+      appendStatus('error', `Demo reset failed: ${error.message}`);
+    } finally {
+      setDemoReviewBusy(false);
+    }
+  }, [appendStatus, demoReviewBusy, demoStarting, isDemoReplyListening, resetDemoUiState, stopDemoReply, ua]);
 
   const finalizeDemoCapture = useCallback(async () => {
     if (!ua || demoReviewBusy || !demoCanFinalize) return;
@@ -482,6 +536,7 @@ export default function App() {
           : 'Hold button to speak task.',
     [mode, demoStage, demoAwaitingConfirmation, executionRunning, isDemoRecording]
   );
+  const showRecordingDot = isListening || isDemoRecording || isDemoReplyListening;
 
   const debugMode = Boolean(settings.debugMode);
   const chatFeed = chatItems;
@@ -501,20 +556,23 @@ export default function App() {
             <p>{modeIndicator}</p>
           </div>
           <div className="header-controls no-drag">
+            {showRecordingDot ? <span className="recording-dot" aria-label="Recording in progress" title="Recording" /> : null}
             <div className="glass-pill mode-pill" role="tablist" aria-label="Mode">
               <button
                 type="button"
                 className={mode === MODES.WORK ? 'active' : ''}
-                onClick={() => setMode(MODES.WORK)}
+                onClick={() => handleModeSelect(MODES.WORK)}
+                disabled={modeSwitchBusy}
               >
-                Work
+                {modeSwitchBusy && modeSwitchTarget === MODES.WORK ? 'Preparing...' : 'Work'}
               </button>
               <button
                 type="button"
                 className={mode === MODES.DEMO ? 'active' : ''}
-                onClick={() => setMode(MODES.DEMO)}
+                onClick={() => handleModeSelect(MODES.DEMO)}
+                disabled={modeSwitchBusy}
               >
-                Demo
+                {modeSwitchBusy && modeSwitchTarget === MODES.DEMO ? 'Preparing...' : 'Demo'}
               </button>
             </div>
             <button type="button" className="icon-btn" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
@@ -535,7 +593,7 @@ export default function App() {
                 <>
                   <button
                     type="button"
-                    disabled={processing || demoReviewBusy}
+                    disabled={processing || demoReviewBusy || demoStarting}
                     onClick={async () => {
                       appendStatus(
                         'status',
@@ -546,12 +604,14 @@ export default function App() {
                       if (!isDemoRecording && !demoSessionActive) {
                         try {
                           setProcessing(true);
+                          setDemoStarting(true);
                           await ua.startDemo();
                           setDemoSessionActive(true);
                         } catch (error) {
                           appendStatus('error', error.message);
                           return;
                         } finally {
+                          setDemoStarting(false);
                           setProcessing(false);
                         }
                       }
@@ -563,18 +623,30 @@ export default function App() {
                       toggleDemoRecording();
                     }}
                     className={`glass-btn ${isDemoRecording ? 'danger' : 'primary'} ${
-                      processing || demoReviewBusy ? 'disabled' : ''
+                      processing || demoReviewBusy || demoStarting ? 'disabled' : ''
                     }`}
                   >
-                    {isDemoRecording ? 'Stop Recording' : 'Start Recording'}
+                    {demoStarting ? 'Preparing...' : isDemoRecording ? 'Stop Recording' : 'Start Recording'}
                   </button>
+                  {demoSessionActive && !isDemoRecording ? (
+                    <button
+                      type="button"
+                      disabled={processing || demoReviewBusy || demoStarting}
+                      onClick={resetDemoFlow}
+                      className={`glass-btn muted ${
+                        processing || demoReviewBusy || demoStarting ? 'disabled' : ''
+                      }`}
+                    >
+                      Try Again
+                    </button>
+                  ) : null}
                   {demoCanFinalize ? (
                     <button
                       type="button"
-                      disabled={processing || demoReviewBusy || isDemoRecording}
+                      disabled={processing || demoReviewBusy || isDemoRecording || demoStarting}
                       onClick={finalizeDemoCapture}
                       className={`glass-btn muted ${
-                        processing || demoReviewBusy || isDemoRecording ? 'disabled' : ''
+                        processing || demoReviewBusy || isDemoRecording || demoStarting ? 'disabled' : ''
                       }`}
                     >
                       End Demo & Review
@@ -668,7 +740,7 @@ export default function App() {
                   processing ? 'disabled' : ''
                 }`}
               >
-                {isWorkStarting ? 'Starting mic...' : isListening ? 'Listening...' : 'Hold to Speak'}
+                {isWorkStarting ? 'Preparing mic...' : isListening ? 'Listening...' : 'Hold to Speak'}
               </button>
               {executionRunning ? (
                 <button

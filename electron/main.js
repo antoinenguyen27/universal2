@@ -202,7 +202,7 @@ app.on('before-quit', async () => {
 });
 
 ipcMain.handle(IPC_CHANNELS.VOICE_PROCESS, async (_event, payload) => {
-  const { audioBase64, mode, audioFormat, demoStage } = payload || {};
+  const { audioBase64, mode, audioFormat, demoStage, segmentTiming } = payload || {};
   let transcript = '';
 
   try {
@@ -236,7 +236,7 @@ ipcMain.handle(IPC_CHANNELS.VOICE_PROCESS, async (_event, payload) => {
 
     if (mode === 'demo') {
       pushStatus(`Routing transcript to demo agent (stage=${demoStage || 'capture'}).`, 'status');
-      const result = await handleVoiceSegment(transcript);
+      const result = await handleVoiceSegment(transcript, segmentTiming || null);
       const isCaptureStage = demoStage === 'capture';
       pushStatus('Demo agent response generated.', 'api');
       const speech =

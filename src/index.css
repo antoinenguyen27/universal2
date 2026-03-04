@@ -231,6 +231,29 @@ button:focus-visible {
   flex: 0 0 auto;
 }
 
+.recording-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: #ff4b4b;
+  box-shadow:
+    0 0 0 1px rgba(255, 75, 75, 0.28),
+    0 0 8px rgba(255, 75, 75, 0.65);
+  animation: recording-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes recording-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.62;
+    transform: scale(0.9);
+  }
+}
+
 .glass-pill {
   background: rgba(0, 0, 0, 0.2);
   border: 1px solid rgba(255, 255, 255, 0.22);
