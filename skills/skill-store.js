@@ -98,4 +98,14 @@ export async function deleteSkill({ domain, filename }) {
   }
 
   await fs.unlink(target);
+
+  // Domain folders can hold multiple skills; only remove when no markdown skills remain.
+  try {
+    const remaining = (await fs.readdir(domainDir)).filter((file) => file.endsWith('.md'));
+    if (remaining.length === 0) {
+      await fs.rmdir(domainDir);
+    }
+  } catch {
+    // Ignore post-delete cleanup failures.
+  }
 }

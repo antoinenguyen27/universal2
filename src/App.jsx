@@ -131,6 +131,11 @@ export default function App() {
     setChatItems((prev) => [...prev, toChatItem('agent', trimmed)].slice(-79));
   }, []);
 
+  const clearChatHistory = useCallback(() => {
+    setChatItems([]);
+    setChatInput('');
+  }, []);
+
   const refreshSkills = useCallback(async () => {
     if (!ua) return;
     const result = await ua.listSkills();
@@ -325,9 +330,14 @@ export default function App() {
     let cancelled = false;
 
     const syncMode = async () => {
+      const previousMode = previousModeRef.current;
+      if (previousMode && previousMode !== mode) {
+        clearChatHistory();
+      }
+
       if (mode === MODES.DEMO) {
         resetDemoUiState();
-      } else if (previousModeRef.current === MODES.DEMO) {
+      } else if (previousMode === MODES.DEMO) {
         try {
           if (isDemoRecordingRef.current) {
             appendStatus('status', 'Switching out of demo: stopping recording and flushing final segment.');
@@ -360,7 +370,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [mode, appendStatus, resetDemoUiState, ua]);
+  }, [mode, appendStatus, clearChatHistory, resetDemoUiState, ua]);
 
   const handleModeSelect = useCallback(
     (nextMode) => {
@@ -388,6 +398,7 @@ export default function App() {
       if (demoSessionActiveRef.current) {
         await ua.endDemo();
       }
+      clearChatHistory();
       resetDemoUiState();
       appendStatus('status', 'Demo reset. Ready to start a new recording.');
     } catch (error) {
@@ -395,7 +406,7 @@ export default function App() {
     } finally {
       setDemoReviewBusy(false);
     }
-  }, [appendStatus, demoReviewBusy, demoStarting, isDemoReplyListening, resetDemoUiState, stopDemoReply, ua]);
+  }, [appendStatus, clearChatHistory, demoReviewBusy, demoStarting, isDemoReplyListening, resetDemoUiState, stopDemoReply, ua]);
 
   const finalizeDemoCapture = useCallback(async () => {
     if (!ua || demoReviewBusy || !demoCanFinalize) return;
