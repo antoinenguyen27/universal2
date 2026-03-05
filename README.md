@@ -2,6 +2,10 @@
 
 Universal is an Electron desktop app with a voice-first control panel and an agent-owned Chrome window controlled by Stagehand.
 
+The original version of Universal was for a submission to Mistral Global Hackathon, we had so much fun building it we had to build out our vision of what it could be in v2.  
+
+You can find it here: [Universal V1](https://github.com/antoinenguyen27/universal)
+
 ## Architecture
 - Renderer (React): mic controls, mode controls, status/transcript feed, settings, skill log.
 - Main process (Electron): transcription, LangGraph orchestration, Stagehand browser execution, TTS, skill I/O.
