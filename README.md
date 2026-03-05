@@ -1,4 +1,4 @@
-# Universal
+# Universal (v2)
 
 Universal is an Electron desktop app with a voice-first control panel and an agent-owned Chrome window controlled by Stagehand.
 
